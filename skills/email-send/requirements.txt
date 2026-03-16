@@ -1,0 +1,2 @@
+# email-send skill dependencies
+# This skill uses built-in Python libraries, no additional dependencies required

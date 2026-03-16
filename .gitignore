@@ -1,0 +1,52 @@
+# ─── OpenClaw Agent 内部文件（不属于本项目）────────────────────
+AGENTS.md
+SOUL.md
+USER.md
+TOOLS.md
+HEARTBEAT.md
+BOOTSTRAP.md
+IDENTITY.md
+.clawhub/
+docs/
+
+# ─── 与招聘无关的其他 skill ─────────────────────────────────────
+skills/searxng/
+skills/stock-watcher/
+
+# ─── 敏感配置文件（含密钥，不上传）─────────────────────────────
+# 请复制 config/*.example.json 填入真实值后使用，但不要提交真实值
+openclaw.json
+email-send-config.json
+recruit-email-config.json
+talent-db-config.json
+feishu-config.json
+*.secret.json
+
+# ─── 候选人数据（含个人隐私 PII，不上传）──────────────────────
+recruit_state.json
+
+# ─── 空的本地 SQLite 遗留文件 ────────────────────────────────────
+skills/recruit-ops/scripts/talent.db
+
+# ─── Agent 记忆（个人隐私）───────────────────────────────────────
+memory/
+MEMORY.md
+
+# ─── 笔试题附件（体积大，请自行准备）────────────────────────────
+skills/recruit-ops/exam_files/*.tar
+skills/recruit-ops/exam_files/*.zip
+
+# ─── Python 缓存 ─────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ─── 测试临时文件 ─────────────────────────────────────────────────
+/test/tmp/
+*.test.json
+
+# ─── 系统文件 ────────────────────────────────────────────────────
+.DS_Store
+.env

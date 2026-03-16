@@ -1,0 +1,10 @@
+{
+  "smtp": {
+    "host": "smtp.qq.com",
+    "port": 587,
+    "username": "<YOUR_EMAIL@qq.com>",
+    "password": "<YOUR_SMTP_AUTH_CODE>",
+    "from_email": "<YOUR_EMAIL@qq.com>",
+    "use_tls": true
+  }
+}
