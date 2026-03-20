@@ -275,17 +275,41 @@ def analyze_code_quality(code_text, config=None):
 def analyze_completeness(attachment_info_list, body_text):
     # type: (list, str) -> dict
     """
-    attachment_info_list: [{"filename": "xxx.py", "size": 1234, "is_text": True}, ...]
+    attachment_info_list: [{"filename": "xxx.py", "size": 1234, "is_text": True,
+                             "archive_contents": [...optional...]}, ...]
+    支持识别压缩包内部的代码文件。
     """
-    code_exts = {".py", ".ipynb", ".r", ".R", ".sql", ".java", ".cpp", ".go"}
+    code_exts = {".py", ".ipynb", ".r", ".R", ".sql", ".java", ".cpp", ".go",
+                 ".js", ".ts", ".c", ".h", ".cs", ".rb", ".scala", ".kt", ".m", ".sh"}
     result_exts = {".csv", ".txt", ".xlsx", ".png", ".jpg", ".pdf", ".json"}
+    archive_exts = {".zip", ".rar", ".tar", ".gz", ".7z"}
 
-    code_files = [a for a in attachment_info_list
-                  if os.path.splitext(a.get("filename", ""))[1].lower() in code_exts]
-    result_files = [a for a in attachment_info_list
-                    if os.path.splitext(a.get("filename", ""))[1].lower() in result_exts]
-    other_files = [a for a in attachment_info_list
-                   if a not in code_files and a not in result_files]
+    code_files = []
+    result_files = []
+    other_files = []
+    archive_files = []
+
+    for a in attachment_info_list:
+        fname = a.get("filename", "")
+        ext = os.path.splitext(fname)[1].lower()
+        if ext in archive_exts:
+            archive_files.append(a)
+            # 同时检查压缩包内部是否有代码文件
+            inner_names = a.get("archive_contents", [])
+            for inner in inner_names:
+                iext = os.path.splitext(inner)[1].lower()
+                if iext in code_exts:
+                    code_files.append({"filename": "{}/{}".format(fname, inner),
+                                       "size": 0, "is_text": True})
+                elif iext in result_exts:
+                    result_files.append({"filename": "{}/{}".format(fname, inner),
+                                         "size": 0, "is_text": True})
+        elif ext in code_exts:
+            code_files.append(a)
+        elif ext in result_exts:
+            result_files.append(a)
+        else:
+            other_files.append(a)
 
     body_len = len((body_text or "").strip())
     has_body = body_len > 30
@@ -294,6 +318,7 @@ def analyze_completeness(attachment_info_list, body_text):
         "total_attachments": len(attachment_info_list),
         "code_files": [a["filename"] for a in code_files],
         "result_files": [a["filename"] for a in result_files],
+        "archive_files": [a["filename"] for a in archive_files],
         "other_files": [a["filename"] for a in other_files],
         "has_body_text": has_body,
         "body_length": body_len,
@@ -395,6 +420,9 @@ def _format_prereview_report(email_data, cand, time_r, code_r, comp_r, score):
         lines.append("  - 代码文件: 未找到 ⚠️")
     if comp_r["result_files"]:
         lines.append("  - 结果文件: {}".format(", ".join(comp_r["result_files"])))
+    if comp_r.get("archive_files"):
+        lines.append("  - 压缩包: {} （已自动解压读取内部代码）".format(
+            ", ".join(comp_r["archive_files"])))
     if comp_r["other_files"]:
         lines.append("  - 其他附件: {}".format(", ".join(comp_r["other_files"])))
     lines.append("  - 正文说明: {}".format(
