@@ -59,13 +59,26 @@ def _load_config():
 
 def _parse_datetime(s):
     # type: (str) -> datetime or None
-    """解析多种日期格式，返回 naive UTC datetime。"""
+    """
+    解析多种日期格式，返回 naive datetime（忽略时区，以本地时间对比）。
+    优先使用 email.utils 解析 RFC 2822 格式（locale 无关），再 fallback 到手动格式。
+    """
     if not s:
         return None
     s = s.strip()
-    # 去掉时区偏移（+0800 / +08:00 / UTC 等）
-    s_clean = re.sub(r'[+-]\d{2}:?\d{2}\s*$', '', s).strip()
-    s_clean = re.sub(r'\s+\([\w]+\)\s*$', '', s_clean).strip()
+
+    # 优先尝试 RFC 2822 标准解析（处理邮件 Date 头，locale 无关）
+    try:
+        import email.utils
+        parsed = email.utils.parsedate_to_datetime(s)
+        # 转为 naive datetime（去掉 tzinfo，统一比较）
+        return parsed.replace(tzinfo=None)
+    except Exception:
+        pass
+
+    # fallback：手动剥离时区后用 strptime
+    s_clean = re.sub(r'\s+\([\w/+-]+\)\s*$', '', s).strip()
+    s_clean = re.sub(r'[+-]\d{2}:?\d{2}\s*$', '', s_clean).strip()
     formats = [
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S",

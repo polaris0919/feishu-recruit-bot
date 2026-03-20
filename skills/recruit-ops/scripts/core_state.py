@@ -9,6 +9,7 @@ DEFAULT_STATE_PATH_ENV = "RECRUIT_STATE_PATH"
 
 STAGES = {
     "NEW",
+    "ROUND1_SCHEDULING",
     "ROUND1_SCHEDULED",
     "ROUND1_DONE_PASS",
     "ROUND1_DONE_REJECT_KEEP",
@@ -26,7 +27,7 @@ STAGES = {
 
 def _now_iso():
     # type: () -> str
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
 
 def get_state_path():

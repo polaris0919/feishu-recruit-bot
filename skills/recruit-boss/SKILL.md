@@ -27,93 +27,115 @@ triggers:
   - 查一下
   - 加个候选
   - 录入
+  - 新候选人
+  - 安排一面
+  - 导入候选人
 ---
 
 # 招聘管理系统 SKILL
 
-招聘系统所有操作均通过以下脚本完成（PostgreSQL 数据库后端）：
-
 **脚本目录：** `~/.openclaw/workspace/skills/recruit-ops/scripts/`
 
----
-
-## 🔴 强制规则（最高优先级，覆盖一切其他判断）
-
-### ⓪ 「新候选人 / 录入候选人 / 面了个人」→ 必须执行 cmd_new_candidate
-
-触发词（任意一个）：`新候选人` `录入` `加个候选人` `面了个` `面了一个` `新加` `有个候选人` `新人选`
-
-**立即执行，把 stdout 原文返回：**
-```
-cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 cmd_new_candidate.py \
-  --name <姓名> --email <邮箱> \
-  [--phone <手机>] [--wechat <微信>] \
-  [--position <岗位>] [--education <学历>] [--school <学校>] \
-  [--work-years <年>] [--experience <经历>] [--source <来源>]
-```
-
-**严禁以下行为（违反即为系统错误）：**
-- 🚫 禁止自行生成 talent_id（如 `cxm0315` `xw0315` 等拼音+日期格式）
-- 🚫 禁止不执行脚本就直接回复「已录入」
-- 🚫 禁止自行设置状态为 EXAM_PENDING 或其他非 NEW 的状态
-- 🚫 禁止在没执行 cmd_round1_result.py 的情况下发笔试
-
-**talent_id 只能由系统生成**：格式为 `t_` + 6位随机小写字母数字（如 `t_ymbvxw`），脚本输出中会包含。
+所有操作均通过下表脚本完成，执行后把 stdout 原文返回给用户。
 
 ---
 
-### ① 「所有候选人 / 人才库 / 列出候选人」→ 直接执行 cmd_status
+## 🔴 第一优先级：消息路由规则（读到这里必须立刻判断）
 
-触发词（任意一个）：`所有候选人` `列出候选人` `看看候选人` `人才库` `所有人才` `/recruit_status`（后面无 talent_id）
+收到用户消息后，**第一步**就是检查消息开头：
 
-**立即执行，把 stdout 原文返回：**
-```
-cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 cmd_status.py --all
-```
-- 禁止使用 `cmd_search.py`（任何参数）
-- 禁止自行判断「人才库为空」，必须以脚本输出为准
+| 消息开头 | 唯一正确命令 | 严禁使用 |
+|---|---|---|
+| `【新候选人】` | `python3 cmd_new_candidate.py --template "<消息原文>"` | ❌ 绝对不能用 cmd_import_candidate.py |
+| `【导入候选人】` | `python3 cmd_import_candidate.py --template "<消息原文>"` | ❌ 绝对不能用 cmd_new_candidate.py |
 
----
-
-### ② 「踢掉 / 移除某候选人」→ 确认后执行 cmd_remove
-
-触发词：`踢掉` `踢出去` `移除` `删掉` `不要这个人了` `从库里删` `彻底删除`
-
-流程：先找到 talent_id → 向老板确认（物理删除不可恢复）→ 确认后执行：
-```
-cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 cmd_remove.py --talent-id <talent_id> --confirm
-```
+**【导入候选人】的处理规则（必须背下来）：**
+- 消息含 `【导入候选人】` → 无条件执行 `cmd_import_candidate.py`
+- 不得问"是否需要调整阶段"
+- 不得执行 `cmd_new_candidate.py`
+- 不得把阶段设成 NEW
+- `cmd_import_candidate.py` 会自动处理阶段、写 DB、发飞书通知，**一步完成**
 
 ---
 
-### ③ 「查邮件 / 看看有没有回信」→ 手动模式扫邮箱
+---
 
-触发词：`查邮件` `看邮件` `有没有人回` `回信了没` `交作业了没` `笔试交了没` `审阅笔试` `有没有提交` `检查一下邮箱`
+## 📋 HR 候选人录入模板（飞书触发）
 
-**立即执行（手动模式，无 --auto 参数）：**
+当 HR 发送以 `【新候选人】` 开头的飞书消息时，**按顺序执行以下两步，缺一不可**：
+
+**第一步**：录入候选人
 ```
-cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 daily_exam_review.py
+python3 cmd_new_candidate.py --template "<原始消息内容>"
 ```
 
-**去重说明（重要）：** 手动扫描和自动 cron 共用同一张 `processed_emails` 去重表。
-- 自动扫描（每30分钟）已推送过的邮件 → 手动查时会回答「暂无新回信」→ **这是正确的**，因为老板飞书已收到过推送
-- 无需重复报告相同邮件
-- 若需强制重新看所有邮件（不去重），执行：`python3 daily_exam_review.py --force`
+**第二步**：从第一步输出中提取 talent_id、姓名、邮箱，然后执行以下命令通知老板（将 `<...>` 替换为实际值）：
+```
+python3 -c "
+import sys; sys.path.insert(0, '.')
+import feishu_notify as fn
+fn.send_text('[新候选人已录入]\ntalent_id: <talent_id>\n姓名：<姓名>\n邮箱：<邮箱>\n岗位：<岗位>\n\n请安排一面时间，对我说：\n  安排 <姓名> 一面，时间是 YYYY-MM-DD HH:MM')
+"
+```
+
+脚本自动解析所有字段、校验必填项（姓名+邮箱），**两步都完成后才算录入成功**。
+
+**模板格式**（HR 每次按此格式发送）：
+```
+【新候选人】
+姓名：张三
+邮箱：zhangsan@example.com
+电话：13800138000
+微信：zhangsan_wx
+应聘职位：量化研究实习生
+学历：硕士
+毕业院校：复旦大学
+工作年限：0
+来源渠道：Boss直聘
+简历摘要：金融工程背景，熟悉Python量化策略开发
+```
 
 ---
 
-### ④ 「二面结束了 / 面完了 / 刚聊完」（无明确结论）→ 立即标记为 pending
+## 📥 HR 导入已有候选人（飞书触发）
 
-触发词：`二面结束了` `面完了` `刚二面完` `二面刚完` `面了` `聊完了` `面过了` `在考虑` `还没想好` `考虑一下` `需要时间想想`（且没有说"通过"或"不合适"）
+当 HR 发送以 `【导入候选人】` 开头的飞书消息时，直接执行（**脚本自动通知老板，无需第二步**）：
 
-**流程：先找到 talent_id（若上下文不明确，询问是哪位候选人），然后立即执行：**
 ```
-cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 cmd_round2_result.py --talent-id <talent_id> --result pending
+python3 cmd_import_candidate.py --template "<原始消息内容>"
 ```
-- 脚本会自动把 `round2_time` 更新为当前时间（即使之前预约的是未来时间）
-- 状态改为 `ROUND2_DONE_PENDING`
-- **30 分钟后系统自动发飞书提醒你给出最终结论**
-- 无需等用户说"记录一下"，识别到上述触发词就直接执行
+
+**模板格式**（HR 每次按此格式发送，每条消息一位候选人）：
+```
+【导入候选人】
+姓名：张三
+邮箱：zhangsan@example.com
+电话：13800000000（选填）
+岗位：量化研究实习生（选填）
+学历：硕士（选填）
+院校：复旦大学（选填）
+来源：猎头（选填）
+当前阶段：笔试中
+一面时间：2026-03-15 14:00（一面邀请中/已确认时必填）
+二面时间：2026-03-25 14:00（二面邀请中/已确认时必填）
+```
+
+**阶段填写说明**（`当前阶段` 字段可填写以下关键词）：
+
+| HR 填写 | 含义 | 额外必填 |
+|---|---|---|
+| 新候选人 / 待安排一面 | 刚收到简历，尚未安排面试 | — |
+| 一面邀请中 | 已发一面邀请，等待候选人确认 | 一面时间 |
+| 一面已确认 | 一面时间已确认，等待面试 | 一面时间 |
+| 笔试中 | 一面通过，笔试已发出，等候提交 | 一面时间（建议填） |
+| 待安排二面 | 笔试已审完，等待安排二面 | — |
+| 二面邀请中 | 已发二面邀请，等待候选人确认 | 二面时间 |
+| 二面已确认 | 二面时间已确认，等待面试 | 二面时间 |
+
+脚本自动：生成 talent_id、设置阶段、写入 DB（round1/round2 confirmed 标记）、飞书通知老板。
+
+> ⚠️ **重要**：`cmd_import_candidate.py` **不会发送任何邮件**（笔试/面试邀请均跳过）。这是补录已有候选人的正确方式。
+> 禁止用 `cmd_round1_result.py` 来"录入已在笔试阶段的候选人"——那会重复发送笔试邮件。
 
 ---
 
@@ -121,120 +143,91 @@ cd ~/.openclaw/workspace/skills/recruit-ops/scripts && python3 cmd_round2_result
 
 | 操作 | 命令 |
 |------|------|
-| 新建候选人 | `python3 cmd_new_candidate.py --name 姓名 --email 邮箱 [--position 岗位] [--phone 手机] [--education 学历] [--school 学校] [--work-years 年] [--source 来源] [--wechat 微信]` |
-| 查询候选人 | `python3 cmd_status.py --talent-id <id>` |
-| 列出所有人 | `python3 cmd_status.py --all` |
+| 新建候选人（逐字段） | `python3 cmd_new_candidate.py --name 姓名 --email 邮箱 [--position 岗位] [--phone 手机] [--education 学历] [--school 学校] [--work-years 年] [--source 来源] [--wechat 微信]` |
+| 新建候选人（模板） | `python3 cmd_new_candidate.py --template "<模板原文>"` |
+| **导入已有候选人（指定阶段）** | `python3 cmd_import_candidate.py --template "<模板原文>"` |
+| **安排一面时间** | `python3 cmd_round1_schedule.py --talent-id <id> --time "YYYY-MM-DD HH:MM"` |
+| **重约一面时间** | `python3 cmd_round1_reschedule.py --talent-id <id> --time "YYYY-MM-DD HH:MM"` |
+| **重约一面时间（老板最终拍板）** | `python3 cmd_round1_reschedule.py --talent-id <id> --time "YYYY-MM-DD HH:MM" --confirmed` ← 老板说"就定这个时间/不用候选人再确认"时用 |
+| **确认一面时间** | `python3 cmd_round1_confirm.py --talent-id <id>` |
+| 查单个候选人 | `python3 cmd_status.py --talent-id <id>` |
+| 列出所有候选人 | `python3 cmd_status.py --all` |
 | 搜索候选人 | `python3 cmd_search.py --query <关键词>` |
-| 一面结果   | `python3 cmd_round1_result.py --talent-id <id> --result pass\|reject_keep\|reject_delete --email <邮箱> [--notes "评价"]` |
-| 笔试结果   | `python3 cmd_exam_result.py --talent-id <id> --result pass\|reject_keep\|reject_delete [--round2-time "YYYY-MM-DD HH:MM"] [--notes "评价"]` |
-| 二面结果   | `python3 cmd_round2_result.py --talent-id <id> --result pending\|pass\|reject_keep\|reject_delete [--notes "评价"]` |
+| 扫邮件（手动） | `python3 daily_exam_review.py` |
+| 一面通过→发笔试 | `python3 cmd_round1_result.py --talent-id <id> --result pass --email <邮箱> [--notes "评价"]` |
+| 一面通过→直接二面 | `python3 cmd_round1_result.py --talent-id <id> --result pass_direct --email <邮箱> --round2-time "YYYY-MM-DD HH:MM" [--interviewer 面试官] [--notes "评价"]` |
+| 一面拒绝 | `python3 cmd_round1_result.py --talent-id <id> --result reject_keep\|reject_delete [--notes "评价"]` |
+| 笔试结果→发二面 | `python3 cmd_exam_result.py --talent-id <id> --result pass --round2-time "YYYY-MM-DD HH:MM" [--notes "评价"]` |
+| 笔试拒绝 | `python3 cmd_exam_result.py --talent-id <id> --result reject_keep\|reject_delete [--notes "评价"]` |
+| 二面结束待定 | `python3 cmd_round2_result.py --talent-id <id> --result pending [--notes "评价"]` |
+| 二面结果 | `python3 cmd_round2_result.py --talent-id <id> --result pass\|reject_keep\|reject_delete [--notes "评价"]` |
+| 重新约二面时间 | `python3 cmd_round2_reschedule.py --talent-id <id> --time "YYYY-MM-DD HH:MM" [--interviewer 面试官]` |
 | 移除候选人 | `python3 cmd_remove.py --talent-id <id> --confirm` |
 
 ---
 
-## 📋 标准招聘流程
+## 📋 完整招聘流程
 
 ```
-新建候选人 (NEW)
-    ↓
-一面结果
-├── reject_keep  → ROUND1_DONE_REJECT_KEEP（保留）
-├── reject_delete → ROUND1_DONE_REJECT_DELETE（移除）
-└── pass         → EXAM_PENDING（发笔试邀请邮件）
-                        ↓
-                   笔试结果
-                   ├── reject_keep  → ROUND1_DONE_REJECT_KEEP
-                   ├── reject_delete → ROUND1_DONE_REJECT_DELETE
-                   └── pass         → ROUND2_SCHEDULED（发二面通知邮件）
-                                           ↓
-                                      二面结果
-                                      ├── pending      → ROUND2_DONE_PENDING
-                                      │     ↓（30分钟后自动飞书催问）
-                                      ├── pass         → OFFER_HANDOFF 🎉
-                                      ├── reject_keep  → ROUND2_DONE_REJECT_KEEP
-                                      └── reject_delete → ROUND2_DONE_REJECT_DELETE
+HR 发送【新候选人】模板
+    ↓ cmd_new_candidate.py 自动录入
+    ↓ 飞书通知老板
+NEW（等待安排一面）
+    ↓ 老板：安排 XX 一面，时间是 YYYY-MM-DD HH:MM
+    ↓ cmd_round1_schedule.py
+ROUND1_SCHEDULING（已发邀请，等候选人确认）
+    ↓ 候选人确认（邮件扫描LLM分析）
+    ├── 确认 → cmd_round1_confirm.py → ROUND1_SCHEDULED（创建老板日历）
+    ├── 改期 → 老板执行 cmd_round1_reschedule.py → 重发邀请
+    └── 超时48h → cmd_round1_confirm.py --auto → ROUND1_SCHEDULED
+ROUND1_SCHEDULED（日历已建，等待一面）
+    ↓ 一面结束，老板评估
+    ├── reject_keep/reject_delete → 结束
+    ├── pass → EXAM_PENDING（自动发笔试邮件）
+    │               ↓ 候选人提交作业（每8h扫描）
+    │               ↓ EXAM_REVIEWED
+    │               ↓ 老板：笔试通过 → ROUND2_SCHEDULED（发二面邀请+日历）
+    │               └── 笔试拒绝 → 结束
+    └── pass_direct → ROUND2_SCHEDULED（跳过笔试，直接安排二面）
+ROUND2_SCHEDULED
+    ↓ 候选人确认（每8h扫描+LLM分析，48h超时自动确认）
+    ↓ 二面结束
+    ├── pass → OFFER_HANDOFF（飞书通知 HR 处理 Offer）
+    └── reject → 结束
 ```
 
----
-
-## 🆔 talent_id 规则
-
-- **格式**：`t_` + 6位随机小写字母数字，如 `t_ymbvxw`
-- **唯一性**：系统自动生成，保证不重复
-- **禁止**：Agent 禁止手动编造 talent_id，必须由 `cmd_new_candidate.py` 生成
-- **talent_id 一旦分配不会改变**
+> **`pass_direct`**：仅在老板明确说「直接二面/不用笔试」时使用，必须提供 `--round2-time`。
 
 ---
 
-## 🗄 数据库字段说明
+## 🗓 面试时间确认机制（一面 & 二面通用）
 
-`talents` 表存储以下信息：
+cron 每8小时自动扫描（`daily_exam_review.py --auto`），扫描结果按以下规则处理：
 
-| 字段 | 说明 |
-|------|------|
-| talent_id | 系统唯一 ID（t_xxxxxx） |
-| candidate_name | 姓名 |
-| candidate_email | 邮箱 |
-| phone | 手机号 |
-| wechat | 微信号 |
-| current_stage | 当前阶段 |
-| position | 应聘岗位 |
-| education | 学历 |
-| school | 毕业院校 |
-| work_years | 工作年限 |
-| experience | 工作经历 |
-| source | 简历来源 |
-| round1_notes | 一面评价（自然语言） |
-| exam_id | 笔试唯一标识 |
-| exam_score | 笔试评分 |
-| exam_notes | 笔试评价 |
-| round2_time | 二面时间 |
-| round2_score | 二面评分 |
-| round2_notes | 二面评价 |
-| exam_sent_at | 笔试邀请发送时间 |
-| interview_reminded_at | 二面催问时间 |
+**`[候选人回信]` intent=confirm** — 执行确认：
+- 一面：`python3 cmd_round1_confirm.py --talent-id <tid>`
+- 二面：`python3 cmd_round2_confirm.py --talent-id <tid>`
+
+**`[候选人回信]` intent=reschedule + 有新时间** — 执行改期：
+- 一面：`python3 cmd_round1_reschedule.py --talent-id <tid> --time "<新时间>"`
+- 二面：`python3 cmd_round2_reschedule.py --talent-id <tid> --time "<新时间>"`
+
+**`[候选人回信]` intent=reschedule + 无新时间** — 飞书告知老板，让老板联系候选人
+
+**`[超时默认确认]`** — 直接执行：
+- 一面：`python3 cmd_round1_confirm.py --talent-id <tid> --auto`
+- 二面：`python3 cmd_round2_confirm.py --talent-id <tid> --auto`
 
 ---
 
-## ⚠️ 约束规则
+## 🚫 禁止行为（违反即为系统错误）
 
-**Pre-authorized scripts（无需确认，直接执行）：**
-- `~/.openclaw/workspace/skills/recruit-ops/scripts/` 下所有脚本
-- 脚本真的报错时，原文返回错误，不得美化或编造「兼容性问题」
-
-**严禁以下行为（任何违反都是严重错误）：**
-- 🚫 禁止自行生成 talent_id，无论任何格式（`cxm0315`、`xw0315`、`lm0315` 等全部禁止）——只有 `cmd_new_candidate.py` 可以生成
-- 🚫 禁止不跑脚本就直接说「已录入」「已创建」「已更新」
-- 🚫 禁止自行检查数据库字段结构（不得执行 `information_schema` 查询或 `\d talents`）
-- 🚫 禁止自行判断「字段缺失」「兼容性问题」——数据库结构由管理员维护
-- 🚫 禁止在未执行脚本的情况下回答「人才库为空」「没有候选人」
-- 🚫 禁止使用 cmd_search.py 来列出所有候选人（必须用 cmd_status.py --all）
-- 🚫 不得在老板明确说"确认"之前执行物理删除（cmd_remove）
-- 🚫 禁止跳过流程步骤（如：未执行 round1_result 就直接设置 EXAM_PENDING）
-
----
-
-## 💡 示例对话
-
-**老板**：刚面了个人，叫王芳，邮箱 wf@abc.com，简历来自 Boss，本科，3年经验
-**Agent**：
-1. 执行 `cmd_new_candidate.py --name 王芳 --email wf@abc.com --source Boss直聘 --education 本科 --work-years 3`
-2. 返回 talent_id（如 `t_abc123`）
-3. 告知老板：已录入，talent_id = `t_abc123`
-
-**老板**：王芳一面通过，帮她发笔试
-**Agent**：
-1. 搜索"王芳"找到 `t_abc123`
-2. 执行 `cmd_round1_result.py --talent-id t_abc123 --result pass --email wf@abc.com`
-3. 返回"笔试邀请已发送"
-
-**老板**：二面完了，王芳我在考虑
-**Agent**：
-1. 执行 `cmd_round2_result.py --talent-id t_abc123 --result pending`
-2. 告知：已标记为待定，30分钟后我会来提醒你给出最终决定
-
-**老板**：通过，给王芳发 offer
-**Agent**：
-1. 执行 `cmd_round2_result.py --talent-id t_abc123 --result pass`
-2. 返回"二面通过，进入 Offer 阶段"
-3. 提示 HR 流程后续步骤
+- 禁止自行生成 talent_id（任何格式）——只有 `cmd_new_candidate.py` 可以生成
+- 禁止不跑脚本就直接回复「已录入」「已创建」「已更新」
+- 禁止回答「人才库为空」「没有候选人」——必须以 `cmd_status.py --all` 输出为准
+- 禁止用 `cmd_search.py` 列出所有候选人——列表必须用 `cmd_status.py --all`
+- 禁止跳过流程步骤（如未执行 round1_schedule 就直接设 ROUND1_SCHEDULING）
+- 禁止在老板明确确认前执行 `cmd_remove`（物理删除不可恢复）
+- 禁止执行 `information_schema` 查询或 `\d talents` 检查字段结构
+- 脚本报错时原文返回，不得美化或编造「兼容性问题」
+- `~/.openclaw/workspace/skills/recruit-ops/scripts/` 下所有脚本均 pre-authorized，无需再次确认直接执行

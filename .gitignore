@@ -32,9 +32,14 @@ skills/recruit-ops/scripts/talent.db
 memory/
 MEMORY.md
 
-# ─── 笔试题附件（体积大，请自行准备）────────────────────────────
+# ─── 敏感 LLM 配置（含 API Key）────────────────────────────────
+dashscope-config.json
+
+# ─── 笔试相关文件（含真实题目和数据，请自行准备）──────────────
 skills/recruit-ops/exam_files/*.tar
 skills/recruit-ops/exam_files/*.zip
+skills/recruit-ops/exam_files/*.csv
+skills/recruit-ops/exam_files/*.txt
 
 # ─── Python 缓存 ─────────────────────────────────────────────────
 __pycache__/

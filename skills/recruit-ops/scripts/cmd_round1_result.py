@@ -72,7 +72,7 @@ def _get_exam_attachments():
     return []
 
 
-def _send_exam_email(talent_id, candidate_email, exam_id, company_name="", position_name=""):
+def _send_exam_email(talent_id, candidate_email, exam_id, company_name="", position_name="", candidate_name=""):
     """调用 email-send 技能发笔试邀请邮件（含附件），失败不中断流程。"""
     script = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -83,14 +83,26 @@ def _send_exam_email(talent_id, candidate_email, exam_id, company_name="", posit
         print("[round1] email_send.py 未找到，跳过发邮件", file=sys.stderr)
         return False
 
-    subject = "【笔试邀请】{}技术岗位笔试".format(company_name + " " if company_name else "")
+    company_display = company_name if company_name else "致邃投资"
+    subject = "【笔试邀请】{} 技术岗位笔试".format(company_display)
     body = (
-        "您好，\n\n感谢您参加我们的面试！\n\n"
-        "您已通过一面，请完成以下笔试题目并回复本邮件（请附上您的代码文件）。\n\n"
-        "笔试标识：{exam_id}\n\n"
-        "附件为笔试题目及相关数据文件，请仔细阅读题目要求后作答。\n\n"
-        "请在收到此邮件后 3 天内提交。\n\n祝好，\n招聘团队"
-    ).format(exam_id=exam_id)
+        "您好，{candidate_name}，\n\n"
+        "感谢您参加我们的初步面试！经过一面评估，您给我们留下了深刻的印象。\n\n"
+        "我们诚邀您完成一份技术笔试，以便我们更全面地了解您的能力。\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📋 笔试说明\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "· 题目已作为附件随本邮件发送，请下载查阅\n"
+        "· 完成后请直接回复本邮件，并附上您的答题文件（代码/文档等）\n"
+        "· 建议完成时间：3~5 个工作日内\n\n"
+        "如有任何疑问，欢迎回复本邮件咨询。\n\n"
+        "期待您的回复！\n\n"
+        "{company} 招聘团队"
+    ).format(
+        candidate_name=candidate_name or "您",
+        company=company_display,
+        exam_id=exam_id,
+    )
 
     attachments = _get_exam_attachments()
     cmd = ["python3", script, "--to", candidate_email, "--subject", subject, "--body", body]
@@ -127,6 +139,8 @@ def parse_args(argv=None):
     p.add_argument("--interviewer", default="", help="二面面试官")
     p.add_argument("--notes", default="", help="一面评价（自然语言，写入数据库 round1_notes）")
     p.add_argument("--company-name", default="", help="公司名称（邮件用）")
+    p.add_argument("--skip-email", action="store_true",
+                   help="跳过发送笔试邮件（补录已手动发过邮件的候选人时使用）")
     p.add_argument("--actor", default="system")
     return p.parse_args(argv or sys.argv[1:])
 
@@ -155,21 +169,34 @@ def main(argv=None):
         cand["candidate_email"] = args.email.strip()
         if args.notes:
             cand["round1_notes"] = args.notes.strip()
-        exam_id = "exam-{}-{}".format(talent_id, datetime.utcnow().strftime("%Y%m%d%H%M%S"))
+        exam_id = "exam-{}-{}".format(talent_id, datetime.now().strftime("%Y%m%d%H%M%S"))
         cand["exam_id"] = exam_id
-        cand["exam_sent_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        cand["exam_sent_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
-        email_ok = _send_exam_email(talent_id, args.email, exam_id, args.company_name)
+        if args.skip_email:
+            email_ok = None  # 跳过发邮件
+        else:
+            email_ok = _send_exam_email(
+                talent_id, args.email, exam_id, args.company_name,
+                candidate_name=cand.get("candidate_name", ""),
+            )
 
         append_audit(cand, actor=args.actor, action="round1_pass_and_exam_invite_sent",
                      payload={"email": args.email, "exam_id": exam_id, "email_sent": email_ok,
                               "notes": args.notes})
 
+        if args.skip_email:
+            email_status = "已跳过（补录模式，邮件已手动发送）"
+        elif email_ok:
+            email_status = "已发送"
+        else:
+            email_status = "发送失败（请手动发送）"
+
         lines = [
             "[一面结果已记录]",
             "- talent_id: {}".format(talent_id),
             "- 结果: 一面通过",
-            "- 笔试邀请: {}".format("已发送" if email_ok else "发送失败（请手动发送）"),
+            "- 笔试邀请: {}".format(email_status),
             "- 笔试 ID: {}".format(exam_id),
             "- 候选人邮箱: {}".format(args.email),
             "- 当前阶段: EXAM_PENDING（等待笔试回复）",
@@ -236,23 +263,32 @@ def main(argv=None):
             lines.insert(3, "- 一面评价: {}".format(args.notes))
 
     else:  # reject_delete
-        ok = ensure_stage_transition(cand, allowed_from, "ROUND1_DONE_REJECT_DELETE")
-        if not ok:
+        if current_stage not in allowed_from:
             print("ERROR: 当前阶段 {} 不允许执行 round1_result=reject_delete。".format(current_stage), file=sys.stderr)
             return 1
 
-        if args.notes:
-            cand["round1_notes"] = args.notes.strip()
-        append_audit(cand, actor=args.actor, action="round1_result_reject_delete",
-                     payload={"notes": args.notes})
+        # 从本地 state 中删除
+        state.get("candidates", {}).pop(talent_id, None)
+        state = normalize_for_save(state)
+        save_state(state)
+
+        # 从数据库彻底删除
+        try:
+            import talent_db as _tdb
+            _tdb.delete_talent(talent_id)
+        except Exception as e:
+            print("⚠ DB 删除失败: {}".format(e), file=sys.stderr)
+
         lines = [
             "[一面结果已记录]",
             "- talent_id: {}".format(talent_id),
-            "- 结果: 未通过（移除）",
-            "- 候选人已标记移除。",
+            "- 结果: 未通过（已从人才库彻底删除）",
+            "- 候选人记录已清除，不再联系。",
         ]
         if args.notes:
             lines.insert(3, "- 一面评价: {}".format(args.notes))
+        print("\n".join(lines))
+        return 0
 
     print("\n".join(lines))
     state = normalize_for_save(state)

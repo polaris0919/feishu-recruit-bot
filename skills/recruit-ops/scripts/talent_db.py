@@ -85,10 +85,10 @@ def _conn_params():
 
 
 def _parse_iso(ts):
-    """Parse ISO timestamp to naive UTC datetime. Python 3.6 compatible."""
+    """Parse ISO timestamp to naive local (CST) datetime. Python 3.6 compatible."""
     s = (ts or "").strip()
     if not s:
-        return datetime.utcnow()
+        return datetime.now()
     s_plain = _re.sub(r"[+-]\d{2}:\d{2}$", "", s.replace("Z", "")).strip()
     s_plain = s_plain.replace("T", " ")
     for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
@@ -96,7 +96,7 @@ def _parse_iso(ts):
             return datetime.strptime(s_plain, fmt)
         except ValueError:
             continue
-    return datetime.utcnow()
+    return datetime.now()
 
 
 def _upsert_talent(conn, tid, cand):
@@ -104,6 +104,7 @@ def _upsert_talent(conn, tid, cand):
     email = (cand.get("candidate_email") or "").strip() or None
     name = (cand.get("candidate_name") or "").strip() or None
     exam_id = (cand.get("exam_id") or "").strip() or None
+    round1_time = (cand.get("round1_time") or "").strip() or None
     round2_time = (cand.get("round2_time") or "").strip() or None
     round2_interviewer = (cand.get("round2_interviewer") or "").strip() or None
     position = (cand.get("position") or "").strip() or None
@@ -124,25 +125,26 @@ def _upsert_talent(conn, tid, cand):
         exam_sent_at = _parse_iso(exam_sent_at_raw) if exam_sent_at_raw else None
     except Exception:
         exam_sent_at = None
-    now = datetime.utcnow()
+    now = datetime.now()
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO talents (
                 talent_id, candidate_email, candidate_name, current_stage,
-                exam_id, round2_time, round2_interviewer, source,
+                exam_id, round1_time, round2_time, round2_interviewer, source,
                 position, education, work_years, experience,
                 school, phone, wechat,
                 round1_notes, exam_score, exam_notes,
                 round2_score, round2_notes,
                 exam_sent_at,
                 created_at, updated_at
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (talent_id) DO UPDATE SET
                 candidate_email    = EXCLUDED.candidate_email,
                 candidate_name     = EXCLUDED.candidate_name,
                 current_stage      = EXCLUDED.current_stage,
                 exam_id            = EXCLUDED.exam_id,
+                round1_time        = COALESCE(EXCLUDED.round1_time, talents.round1_time),
                 round2_time        = EXCLUDED.round2_time,
                 round2_interviewer = EXCLUDED.round2_interviewer,
                 source             = EXCLUDED.source,
@@ -161,7 +163,7 @@ def _upsert_talent(conn, tid, cand):
                 exam_sent_at       = COALESCE(talents.exam_sent_at, EXCLUDED.exam_sent_at),
                 updated_at         = EXCLUDED.updated_at
             """,
-            (tid, email, name, stage, exam_id, round2_time, round2_interviewer, source,
+            (tid, email, name, stage, exam_id, round1_time, round2_time, round2_interviewer, source,
              position, education, work_years, experience,
              school, phone, wechat,
              round1_notes, exam_score, exam_notes,
@@ -198,7 +200,7 @@ def _insert_events(conn, talent_id, audit):
         try:
             at_dt = _parse_iso(at_str)
         except Exception:
-            at_dt = datetime.utcnow()
+            at_dt = datetime.now()
         key = (at_dt.strftime("%Y-%m-%d %H:%M:%S"), action)
         if key in existing:
             continue
@@ -229,11 +231,13 @@ def load_state_from_db():
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT talent_id, candidate_email, candidate_name, current_stage, "
-                "exam_id, round2_time, round2_interviewer, source, "
+                "exam_id, round1_time, round2_time, round2_interviewer, source, "
                 "position, education, work_years, experience, "
                 "school, phone, wechat, "
                 "round1_notes, exam_score, exam_notes, "
-                "round2_score, round2_notes, updated_at, exam_sent_at FROM talents"
+                "round2_score, round2_notes, updated_at, exam_sent_at, "
+                "round2_invite_sent_at, round2_confirmed, round2_calendar_event_id, "
+                "round1_invite_sent_at, round1_confirmed, round1_calendar_event_id FROM talents"
             )
             for row in cur.fetchall():
                 tid = (row[0] or "").strip()
@@ -246,23 +250,30 @@ def load_state_from_db():
                     "stage": (row[3] or "NEW").strip(),
                     "audit": [],
                     "exam_id": (row[4] or "").strip() or None,
-                    "round2_time": str(row[5]).strip() if row[5] else None,
-                    "round2_interviewer": (row[6] or "").strip() or None,
-                    "source": (row[7] or "").strip() or None,
-                    "position": (row[8] or "").strip() or None,
-                    "education": (row[9] or "").strip() or None,
-                    "work_years": row[10],
-                    "experience": (row[11] or "").strip() or None,
-                    "school": (row[12] or "").strip() or None,
-                    "phone": (row[13] or "").strip() or None,
-                    "wechat": (row[14] or "").strip() or None,
-                    "round1_notes": (row[15] or "").strip() or None,
-                    "exam_score": row[16],
-                    "exam_notes": (row[17] or "").strip() or None,
-                    "round2_score": row[18],
-                    "round2_notes": (row[19] or "").strip() or None,
-                    "updated_at": row[20].isoformat() if row[20] else None,
-                    "exam_sent_at": row[21].isoformat() if row[21] else None,
+                    "round1_time": str(row[5]).strip() if row[5] else None,
+                    "round2_time": str(row[6]).strip() if row[6] else None,
+                    "round2_interviewer": (row[7] or "").strip() or None,
+                    "source": (row[8] or "").strip() or None,
+                    "position": (row[9] or "").strip() or None,
+                    "education": (row[10] or "").strip() or None,
+                    "work_years": row[11],
+                    "experience": (row[12] or "").strip() or None,
+                    "school": (row[13] or "").strip() or None,
+                    "phone": (row[14] or "").strip() or None,
+                    "wechat": (row[15] or "").strip() or None,
+                    "round1_notes": (row[16] or "").strip() or None,
+                    "exam_score": row[17],
+                    "exam_notes": (row[18] or "").strip() or None,
+                    "round2_score": row[19],
+                    "round2_notes": (row[20] or "").strip() or None,
+                    "updated_at": row[21].isoformat() if row[21] else None,
+                    "exam_sent_at": row[22].isoformat() if row[22] else None,
+                    "round2_invite_sent_at": row[23].isoformat() if row[23] else None,
+                    "round2_confirmed": bool(row[24]) if row[24] is not None else False,
+                    "round2_calendar_event_id": (row[25] or "").strip() or None,
+                    "round1_invite_sent_at": row[26].isoformat() if row[26] else None,
+                    "round1_confirmed": bool(row[27]) if row[27] is not None else False,
+                    "round1_calendar_event_id": (row[28] or "").strip() or None,
                 }
                 candidates[tid] = cand
         with conn.cursor() as cur:
@@ -372,6 +383,30 @@ def get_processed_email_ids():
     return result
 
 
+def delete_talent(talent_id):
+    # type: (str) -> None
+    """从数据库彻底删除候选人及其所有关联记录（talent_events、processed_emails）。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM talent_events WHERE talent_id = %s", (talent_id,))
+            cur.execute("DELETE FROM processed_emails WHERE talent_id = %s", (talent_id,))
+            cur.execute("DELETE FROM talents WHERE talent_id = %s", (talent_id,))
+        conn.commit()
+        print("[talent_db] 已从数据库删除候选人 {}".format(talent_id))
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] delete_talent 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
 def mark_emails_processed(entries):
     # type: (List[tuple]) -> None
     if not _is_enabled() or not entries:
@@ -420,6 +455,78 @@ def mark_interview_reminded(talent_id):
         conn.close()
 
 
+def get_pending_round1_reminders():
+    # type: () -> List[Dict[str, Any]]
+    """查找一面已安排、面试时间已过、尚未发过提醒的候选人。"""
+    if not _is_enabled():
+        return []
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return []
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT talent_id, candidate_name, candidate_email, round1_time
+                FROM talents
+                WHERE current_stage = 'ROUND1_SCHEDULED'
+                  AND round1_reminded_at IS NULL
+                  AND round1_time IS NOT NULL
+                """,
+            )
+            rows = cur.fetchall()
+        for row in rows:
+            tid, name, email, r1time_raw = row[0], row[1] or "", row[2] or "", row[3]
+            if not r1time_raw:
+                continue
+            r1time_str = str(r1time_raw).strip()
+            try:
+                r1dt = datetime.strptime(r1time_str[:16], "%Y-%m-%d %H:%M")
+                now = datetime.now()
+                elapsed_minutes = (now - r1dt).total_seconds() / 60
+                if elapsed_minutes >= 1:
+                    results.append({
+                        "talent_id": tid,
+                        "candidate_name": name,
+                        "candidate_email": email,
+                        "round1_time": r1time_str,
+                        "elapsed_minutes": int(elapsed_minutes),
+                    })
+            except Exception:
+                continue
+    except Exception as e:
+        print("[talent_db] get_pending_round1_reminders 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+    return results
+
+
+def mark_round1_reminded(talent_id):
+    # type: (str) -> None
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE talents SET round1_reminded_at = NOW() WHERE talent_id = %s",
+                (talent_id,),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] mark_round1_reminded 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
 def get_pending_interview_reminders():
     # type: () -> List[Dict[str, Any]]
     if not _is_enabled():
@@ -434,7 +541,7 @@ def get_pending_interview_reminders():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT talent_id, candidate_email, round2_time
+                SELECT talent_id, candidate_name, candidate_email, round2_time
                 FROM talents
                 WHERE current_stage IN ('ROUND2_SCHEDULED', 'ROUND2_DONE_PENDING')
                   AND interview_reminded_at IS NULL
@@ -443,18 +550,18 @@ def get_pending_interview_reminders():
             )
             rows = cur.fetchall()
         for row in rows:
-            tid, email, r2time_raw = row[0], row[1] or "", row[2]
+            tid, name, email, r2time_raw = row[0], row[1] or "", row[2] or "", row[3]
             if not r2time_raw:
                 continue
             r2time_str = str(r2time_raw).strip()
             try:
                 r2dt = datetime.strptime(r2time_str[:16], "%Y-%m-%d %H:%M")
-                from datetime import timedelta
-                now_cst = datetime.utcnow() + timedelta(hours=8)
+                now_cst = datetime.now()
                 elapsed_minutes = (now_cst - r2dt).total_seconds() / 60
                 if elapsed_minutes >= 1:
                     results.append({
                         "talent_id": tid,
+                        "candidate_name": name,
                         "candidate_email": email,
                         "round2_time": r2time_str,
                         "elapsed_minutes": int(elapsed_minutes),
@@ -516,6 +623,236 @@ def save_exam_prereview(talent_id, exam_score, exam_notes):
         print("[talent_db] save_exam_prereview 失败: {}".format(e), file=sys.stderr)
     finally:
         conn.close()
+
+
+def save_round2_invite_info(talent_id, calendar_event_id=None):
+    # type: (str, Optional[str]) -> None
+    """记录二面邀请发出时间（NOW()），可选同时写入日历事件 ID。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            if calendar_event_id:
+                cur.execute(
+                    "UPDATE talents SET round2_invite_sent_at = NOW(),"
+                    " round2_calendar_event_id = %s, round2_confirmed = FALSE"
+                    " WHERE talent_id = %s",
+                    (calendar_event_id, talent_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE talents SET round2_invite_sent_at = NOW(),"
+                    " round2_confirmed = FALSE"
+                    " WHERE talent_id = %s",
+                    (talent_id,),
+                )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] save_round2_invite_info 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def mark_round2_confirmed(talent_id, auto=False):
+    # type: (str, bool) -> None
+    """标记候选人已确认二面时间（auto=True 表示超时默认确认）。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE talents SET round2_confirmed = TRUE WHERE talent_id = %s",
+                (talent_id,),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] mark_round2_confirmed 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def get_round2_pending_confirmations():
+    # type: () -> List[Dict[str, Any]]
+    """
+    返回所有 ROUND2_SCHEDULED 且尚未确认的候选人，
+    附带 round2_invite_sent_at 用于判断是否超 48 小时。
+    """
+    if not _is_enabled():
+        return []
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return []
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT talent_id, candidate_email, candidate_name,
+                       round2_time, round2_invite_sent_at, round2_confirmed,
+                       round2_calendar_event_id
+                FROM talents
+                WHERE current_stage = 'ROUND2_SCHEDULED'
+                  AND (round2_confirmed IS NULL OR round2_confirmed = FALSE)
+                  AND candidate_email IS NOT NULL
+                """
+            )
+            for row in cur.fetchall():
+                results.append({
+                    "talent_id": (row[0] or "").strip(),
+                    "candidate_email": (row[1] or "").strip(),
+                    "candidate_name": (row[2] or "").strip() or None,
+                    "round2_time": str(row[3]).strip() if row[3] else None,
+                    "round2_invite_sent_at": row[4].isoformat() if row[4] else None,
+                    "round2_confirmed": bool(row[5]) if row[5] is not None else False,
+                    "round2_calendar_event_id": (row[6] or "").strip() or None,
+                })
+    except Exception as e:
+        print("[talent_db] get_round2_pending_confirmations 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+    return results
+
+
+def save_round1_invite_info(talent_id, calendar_event_id=None):
+    # type: (str, Any) -> None
+    """记录一面邀请发出时间（NOW()），可选同时写入日历事件 ID，并重置 round1_confirmed=FALSE。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            if calendar_event_id:
+                cur.execute(
+                    "UPDATE talents SET round1_invite_sent_at = NOW(),"
+                    " round1_calendar_event_id = %s, round1_confirmed = FALSE"
+                    " WHERE talent_id = %s",
+                    (calendar_event_id, talent_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE talents SET round1_invite_sent_at = NOW(),"
+                    " round1_confirmed = FALSE"
+                    " WHERE talent_id = %s",
+                    (talent_id,),
+                )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] save_round1_invite_info 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def update_round1_calendar_event_id(talent_id, event_id):
+    # type: (str, str) -> None
+    """仅更新一面日历事件 ID，不改动 round1_confirmed / round1_invite_sent_at。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE talents SET round1_calendar_event_id = %s WHERE talent_id = %s",
+                (event_id, talent_id),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] update_round1_calendar_event_id 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def mark_round1_confirmed(talent_id, auto=False):
+    # type: (str, bool) -> None
+    """标记候选人已确认一面时间，阶段推进到 ROUND1_SCHEDULED。"""
+    if not _is_enabled():
+        return
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE talents SET round1_confirmed = TRUE,"
+                " current_stage = 'ROUND1_SCHEDULED'"
+                " WHERE talent_id = %s",
+                (talent_id,),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("[talent_db] mark_round1_confirmed 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def get_round1_pending_confirmations():
+    # type: () -> List[Dict[str, Any]]
+    """
+    返回所有 ROUND1_SCHEDULING 且尚未确认的候选人，
+    附带 round1_invite_sent_at 用于判断是否超 48 小时。
+    """
+    if not _is_enabled():
+        return []
+    try:
+        conn = psycopg2.connect(**_conn_params())
+    except Exception as e:
+        print("[talent_db] 连接失败: {}".format(e), file=sys.stderr)
+        return []
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT talent_id, candidate_email, candidate_name,
+                       round1_time, round1_invite_sent_at, round1_confirmed,
+                       round1_calendar_event_id
+                FROM talents
+                WHERE current_stage = 'ROUND1_SCHEDULING'
+                  AND (round1_confirmed IS NULL OR round1_confirmed = FALSE)
+                  AND candidate_email IS NOT NULL
+                """
+            )
+            for row in cur.fetchall():
+                results.append({
+                    "talent_id": (row[0] or "").strip(),
+                    "candidate_email": (row[1] or "").strip(),
+                    "candidate_name": (row[2] or "").strip() or None,
+                    "round1_time": str(row[3]).strip() if row[3] else None,
+                    "round1_invite_sent_at": row[4].isoformat() if row[4] else None,
+                    "round1_confirmed": bool(row[5]) if row[5] is not None else False,
+                    "round1_calendar_event_id": (row[6] or "").strip() or None,
+                })
+    except Exception as e:
+        print("[talent_db] get_round1_pending_confirmations 失败: {}".format(e), file=sys.stderr)
+    finally:
+        conn.close()
+    return results
 
 
 if __name__ == "__main__":

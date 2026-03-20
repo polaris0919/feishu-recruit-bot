@@ -11,6 +11,7 @@ import sys
 from datetime import datetime
 from typing import List, Optional
 
+import feishu_notify as _fn
 from core_state import (
     append_audit,
     ensure_stage_transition,
@@ -81,15 +82,23 @@ def main(argv=None):
             "- talent_id: {}".format(talent_id),
             "- 结果: 通过 🎉",
             "- 候选人邮箱: {}".format(cand.get("candidate_email", "未记录")),
-            "- 当前阶段: OFFER_HANDOFF（等待发放 Offer）",
-            "",
-            "📋 后续动作（HR 请手动完成）：",
-            "  1. 与业务负责人确认 Offer 薪资和职级",
-            "  2. 通过 HR 系统发送正式 Offer",
-            "  3. 候选人确认后更新人才库状态",
+            "- 当前阶段: OFFER_HANDOFF（已通知 HR 处理 Offer）",
         ]
         if args.notes:
             lines.insert(4, "- 面试备注: {}".format(args.notes))
+
+        # 通知 HR
+        hr_msg = (
+            "[Offer 处理通知]\n"
+            "候选人 {name}（{talent_id}）已通过二面\n"
+            "邮箱：{email}\n"
+            "请给该候选人发放offer"
+        ).format(
+            name=cand.get("candidate_name", talent_id),
+            talent_id=talent_id,
+            email=cand.get("candidate_email", "未记录"),
+        )
+        _fn.send_text_to_hr(hr_msg)
 
     elif result == "reject_keep":
         ok = ensure_stage_transition(cand, allowed_from, "ROUND2_DONE_REJECT_KEEP")
@@ -112,23 +121,32 @@ def main(argv=None):
             lines.insert(4, "- 面试备注: {}".format(args.notes))
 
     else:  # reject_delete
-        ok = ensure_stage_transition(cand, allowed_from, "ROUND2_DONE_REJECT_DELETE")
-        if not ok:
+        if current_stage not in allowed_from:
             print("ERROR: 当前阶段 {} 不允许执行 round2_result=reject_delete。".format(current_stage), file=sys.stderr)
             return 1
 
-        if args.notes:
-            cand["round2_notes"] = args.notes.strip()
-        append_audit(cand, actor=args.actor, action="round2_reject_delete",
-                     payload={"notes": args.notes})
+        # 从本地 state 中删除
+        state.get("candidates", {}).pop(talent_id, None)
+        state = normalize_for_save(state)
+        save_state(state)
+
+        # 从数据库彻底删除
+        try:
+            import talent_db as _tdb
+            _tdb.delete_talent(talent_id)
+        except Exception as e:
+            print("⚠ DB 删除失败: {}".format(e), file=sys.stderr)
+
         lines = [
             "[二面结果已记录]",
             "- talent_id: {}".format(talent_id),
-            "- 结果: 未通过（从人才库移除）",
-            "- 后续动作: 候选人已标记为不再联系，人才库记录将清除。",
+            "- 结果: 未通过（已从人才库彻底删除）",
+            "- 后续动作: 候选人记录已清除，不再联系。",
         ]
         if args.notes:
             lines.insert(3, "- 面试备注: {}".format(args.notes))
+        print("\n".join(lines))
+        return 0
 
     print("\n".join(lines))
     state = normalize_for_save(state)

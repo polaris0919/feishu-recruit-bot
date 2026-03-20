@@ -56,32 +56,35 @@ EMAIL_SEND_SCRIPT = os.path.expanduser(
 )
 
 
-def send_round2_notification(to_email, talent_id, round2_time, interviewer, company=""):
-    # type: (str, str, str, str, str) -> int
+def send_round2_notification(to_email, talent_id, round2_time, interviewer, company="", candidate_name=""):
+    # type: (str, str, str, str, str, str) -> int
     """在独立 session 后台发送二面通知邮件，返回 PID。"""
-    subject = "[面试通知] 笔试通过，邀请参加第二轮面试"
-    if company:
-        subject = "[面试通知] 笔试通过，邀请参加第二轮面试 - " + company
+    company_display = company if company else "公司"
+    subject = "【面试通知】笔试通过，邀请参加第二轮面试 - " + company_display
 
-    time_line = ("面试时间：" + round2_time) if round2_time else "面试时间：待定，HR 将另行通知"
-    interviewer_line = ("面试官：" + interviewer) if interviewer else ""
+    time_line = round2_time if round2_time else "待定，HR 将另行通知"
 
     body_parts = [
-        "您好，",
+        "您好，{}，".format(candidate_name if candidate_name else ""),
         "",
-        "感谢您完成笔试！经过评审，您已通过本轮笔试，我们诚邀您参加第二轮面试。",
+        "感谢您认真完成笔试！经过评审，您已顺利通过本轮笔试，恭喜！",
         "",
-        "【面试详情】",
-        time_line,
-    ]
-    if interviewer_line:
-        body_parts.append(interviewer_line)
-    body_parts += [
-        "面试形式：视频/电话面试（HR 将提前发送具体会议链接）",
+        "我们诚邀您参加第二轮面试，详情如下：",
         "",
-        "请确认您是否能够按时参加。如有时间冲突，请尽快回复本邮件说明。",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "🗓 面试详情",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "· 面试时间：" + time_line,
+        "· 面试形式：线下面试",
+        "· 面试地点：上海市浦东新区杨高中路丁香国际商业中心西塔21楼致邃投资",
+        "━━━━━━━━━━━━━━━━━━━━",
         "",
-        "期待与您的进一步交流！",
+        "请您确认是否可以按时参加。",
+        "如有时间冲突，请提前回复本邮件告知，我们会及时为您调整。",
+        "",
+        "再次感谢您对 {} 的关注，期待与您的进一步交流！".format(company_display),
+        "",
+        company_display + " 招聘团队",
         "",
         "---",
         "TALENT_ID: " + talent_id,
@@ -180,6 +183,8 @@ def main(argv=None):
                 talent_id=talent_id,
                 round2_time=args.round2_time,
                 interviewer=args.interviewer,
+                company="致邃投资",
+                candidate_name=cand.get("candidate_name", ""),
             )
         else:
             print("WARNING: 候选人邮箱未记录，无法自动发送二面通知邮件。", file=sys.stderr)
@@ -215,6 +220,14 @@ def main(argv=None):
         # 保存状态（必须在任何网络调用之前完成，防止超时导致状态丢失）
         state = normalize_for_save(state)
         save_state(state)
+
+        # 记录二面邀请发出时间（供48h确认超时判断使用）
+        try:
+            import talent_db as _tdb
+            if _tdb._is_enabled():
+                _tdb.save_round2_invite_info(talent_id)
+        except Exception:
+            pass
 
         # 飞书日历：后台独立进程，不阻塞主流程，不受 exec 超时影响
         if args.round2_time:
@@ -266,32 +279,37 @@ def main(argv=None):
 
     else:  # reject_delete
         allowed_from = {"EXAM_PENDING", "EXAM_REVIEWED"}
-        ok = ensure_stage_transition(cand, allowed_from, "ROUND1_DONE_REJECT_DELETE")
-        if not ok:
+        if current_stage not in allowed_from:
             print(
-                f"ERROR: 当前阶段 {current_stage} 不允许执行 exam_result=reject_delete。",
+                "ERROR: 当前阶段 {} 不允许执行 exam_result=reject_delete。".format(current_stage),
                 file=sys.stderr,
             )
             return 1
 
-        if args.notes:
-            existing = (cand.get("exam_notes") or "").strip()
-            manual_note = "[人工评价] " + args.notes.strip()
-            cand["exam_notes"] = (existing + "\n" + manual_note).strip() if existing else manual_note
-        append_audit(
-            cand,
-            actor=args.actor,
-            action="exam_result_reject_delete",
-            payload={"notes": args.notes},
-        )
-        print(
-            f"[笔试结果已记录]\n"
-            f"- talent_id: {talent_id}\n"
-            f"- 结果: 未通过（从人才库移除）\n"
-            f"- 后续动作: 候选人已标记为不再联系，人才库记录将清除。"
-        )
+        # 从本地 state 中删除
+        state.get("candidates", {}).pop(talent_id, None)
+        state = normalize_for_save(state)
+        save_state(state)
 
-    # pass 分支已在上方提前 save_state + return，此处处理 reject 分支
+        # 从数据库彻底删除
+        try:
+            import talent_db as _tdb
+            _tdb.delete_talent(talent_id)
+        except Exception as e:
+            print("⚠ DB 删除失败: {}".format(e), file=sys.stderr)
+
+        notes_line = ""
+        if args.notes:
+            notes_line = "\n- 评价: {}".format(args.notes.strip())
+        print(
+            "[笔试结果已记录]\n"
+            "- talent_id: {}\n"
+            "- 结果: 未通过（已从人才库彻底删除）\n"
+            "- 候选人记录已清除，不再联系。{}".format(talent_id, notes_line)
+        )
+        return 0
+
+    # pass/reject_keep 分支已在上方提前 save_state + return，此处处理剩余 reject 分支
     state = normalize_for_save(state)
     save_state(state)
     return 0

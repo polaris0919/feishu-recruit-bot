@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-二面完成后 30 分钟自动催问二面评价与决定（cron 触发）。
-只处理处于 ROUND2_SCHEDULED / ROUND2_DONE_PENDING 且未发过提醒的候选人。
+面试完成后自动催问面试评价与决定（cron 触发）。
+- 一面：ROUND1_SCHEDULED 且面试时间已过 → 催问一面结果
+- 二面：ROUND2_SCHEDULED / ROUND2_DONE_PENDING 且面试时间已过 → 催问二面结果
 """
 import sys
 import os
-import json
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -19,35 +19,70 @@ def run():
         print("[interview_reminder] DB 未配置，跳过", file=sys.stderr)
         return 0
 
-    pendinglist = talent_db.get_pending_interview_reminders()
-    if not pendinglist:
-        return 0
-
     messages = []
-    for item in pendinglist:
+
+    # ── 一面催问 ──────────────────────────────────────────────────
+    round1_pending = talent_db.get_pending_round1_reminders()
+    for item in round1_pending:
         tid = item["talent_id"]
-        email = item.get("candidate_email", "")
+        name = item.get("candidate_name", tid)
+        r1time = item.get("round1_time", "")
+        elapsed = item.get("elapsed_minutes", 30)
+
+        elapsed_str = "{}分钟".format(elapsed) if elapsed < 60 else "约{:.1f}小时".format(elapsed / 60)
+        msg = (
+            "🔔 一面结果催问提醒\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "候选人：{name}（{tid}）\n"
+            "预定一面时间：{r1time}\n"
+            "已过去：{elapsed_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "请问一面结果如何？\n"
+            "  · 如通过 → 回复：{name} 一面通过\n"
+            "  · 如拒绝 → 回复：{name} 一面不通过\n"
+            "  · 如直接进二面 → 回复：{name} 一面通过，直接安排二面"
+        ).format(tid=tid, name=name, r1time=r1time, elapsed_str=elapsed_str)
+
+        messages.append(("round1", tid, msg))
+
+    # ── 二面催问 ──────────────────────────────────────────────────
+    round2_pending = talent_db.get_pending_interview_reminders()
+    for item in round2_pending:
+        tid = item["talent_id"]
+        name = item.get("candidate_name", tid)
         r2time = item.get("round2_time", "")
         elapsed = item.get("elapsed_minutes", 30)
 
+        elapsed_str = "{}分钟".format(elapsed) if elapsed < 60 else "约{:.1f}小时".format(elapsed / 60)
         msg = (
-            "🔔 **二面结果催问提醒**\n\n"
-            "候选人 `{tid}` 的二面已在约 {elapsed} 分钟前结束（预定时间：{r2time}）。\n\n"
-            "请问：\n"
-            "1. 二面结果如何？（通过 / 拒绝 / 需再考虑）\n"
-            "2. 有什么具体的面试反馈或评价吗？\n\n"
-            "如已有决定，请告知，我会立即更新系统记录。"
-        ).format(tid=tid, elapsed=elapsed, r2time=r2time, email=email)
+            "🔔 二面结果催问提醒\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "候选人：{name}（{tid}）\n"
+            "预定二面时间：{r2time}\n"
+            "已过去：{elapsed_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "请问二面结果如何？\n"
+            "  · 如通过 → 回复：{name} 二面通过\n"
+            "  · 如拒绝 → 回复：{name} 二面不通过\n"
+            "  · 如需再考虑 → 回复：{name} 二面待定"
+        ).format(tid=tid, name=name, r2time=r2time, elapsed_str=elapsed_str)
 
-        messages.append((tid, msg))
+        messages.append(("round2", tid, msg))
+
+    if not messages:
+        print("[interview_reminder] 暂无需催问的候选人")
+        return 0
 
     sent_count = 0
-    for tid, msg in messages:
+    for round_type, tid, msg in messages:
         ok = feishu_notify.send_text(msg)
         if ok:
-            talent_db.mark_interview_reminded(tid)
+            if round_type == "round1":
+                talent_db.mark_round1_reminded(tid)
+            else:
+                talent_db.mark_interview_reminded(tid)
             sent_count += 1
-            print("[interview_reminder] 已催问候选人 {}".format(tid))
+            print("[interview_reminder] 已催问候选人 {} ({})".format(tid, round_type))
         else:
             print("[interview_reminder] 发送失败: {}".format(tid), file=sys.stderr)
 
