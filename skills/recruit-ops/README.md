@@ -1,6 +1,6 @@
 # 飞书招聘管家 — recruit-ops
 
-> **版本**：v2.0（2026-03）  
+> **版本**：v2.1（2026-03）  
 > **运行环境**：OpenClaw Gateway · Python 3.6+ · PostgreSQL · 飞书 WebSocket  
 > **代码位置**：`~/.openclaw/workspace/skills/recruit-ops/`
 
@@ -35,6 +35,8 @@
 | **超时自动确认** | 候选人 48 小时未回复邮件，系统默认确认，自动创建日历 |
 | **PostgreSQL 持久化** | 所有候选人数据存入 PostgreSQL，支持复杂查询和历史审计 |
 | **批量导入** | 支持导入已有候选人并指定当前阶段，适合系统上线初期迁移历史数据 |
+| **压缩包自动解压** | 候选人提交 `.zip`/`.rar` 答卷时，自动解压读取内部代码文件并纳入预审分析 |
+| **精准答题用时** | 从已发送文件夹查找实际笔试邮件发出时间，替代数据库记录，确保答题用时准确 |
 
 ### 招聘阶段总览
 
@@ -103,6 +105,7 @@ ROUND1_DONE_PASS   REJECT_KEEP         从DB彻底删除
            ↓
     候选人回复提交答案（自动扫描，每 12h）
     预审：代码质量、答题时间、附件分析
+    支持 .zip/.rar 自动解压，从已发送查真实发件时间
            ↓
     老板审阅后：记录笔试结果
            ↓
@@ -240,7 +243,7 @@ OC 自动发送邀请邮件给候选人，等待候选人回复。
 
 | cron 任务 | 频率 | 说明 |
 |---------|------|------|
-| 笔试回复扫描 | 每 12 小时 | 扫描候选人提交的笔试答案，自动预审后推送飞书 |
+| 笔试回复扫描 | 每 12 小时 | 扫描候选人提交的笔试答案，自动解压 zip/rar、读取代码、预审后推送飞书 |
 | 面试确认扫描 | 每 8 小时 | LLM 分析候选人回复邮件意图（确认/改期），48h 超时自动默认确认 |
 | 面试催问提醒 | 每 30 分钟 | 面试结束后若老板未给结果，自动催问 |
 
@@ -314,6 +317,8 @@ scripts/
 | 邮件去重 | `processed_emails` 表记录已处理 Message-ID，防止重复推送 |
 | 时区处理 | 所有时间戳统一以本地 CST（UTC+8）存储和显示 |
 | 状态持久化 | PostgreSQL 为主存储；`recruit_state.json` 作为本地缓存 |
+| zip/rar 解压 | `zipfile`（标准库）处理 zip；`unrar-cffi`（`pip install --user unrar-cffi`，无需 sudo）处理 rar，写临时文件后读取（RarFile 不支持 BytesIO） |
+| 笔试发件时间精度 | 扫到候选人回复时，从「已发送」文件夹按收件人+笔试关键词匹配，取最早那封的真实发件时间，覆盖 DB 中可能不准的 `exam_sent_at` |
 
 ---
 
@@ -372,7 +377,7 @@ python3 -c "import feishu_notify as fn; fn.send_text_to_hr('发给HR的消息')"
 ### 8.1 前置条件
 
 - OpenClaw Gateway 已安装并运行
-- Python 3.6+，已安装 `psycopg2`、`python-dateutil`
+- Python 3.6+，已安装 `psycopg2`、`python-dateutil`、`unrar-cffi`（`pip install --user unrar-cffi`，处理 rar 附件）
 - PostgreSQL 数据库（版本 10+）
 - 飞书企业自建应用（WebSocket 模式），已开通权限：
   - `im:message`（收发消息）
@@ -525,7 +530,7 @@ PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
   -c "SELECT talent_id, candidate_name, current_stage FROM talents ORDER BY updated_at DESC;"
 ```
 
-### 处理邮件被误标"已处理"
+### 处理邮件被误标"已处理" / 重跑预审
 
 ```bash
 # 查看已处理邮件记录
@@ -535,6 +540,16 @@ PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
 # 清除某封邮件的去重记录（让系统重新处理）
 PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
   -c "DELETE FROM processed_emails WHERE message_id='<Message-ID>';"
+
+# 注意：若邮件在 IMAP 中已被标为已读，还需重新标回未读，否则扫描会跳过
+# 可通过邮件客户端手动标为未读，或用以下脚本（INBOX 中第 N 封）：
+# python3 -c "
+# import sys; sys.path.insert(0, 'scripts')
+# import daily_exam_review as dr
+# imap = dr.connect_imap(); imap.select('INBOX')
+# imap.store(b'<序号>', '-FLAGS', '\\\\Seen')
+# imap.logout()
+# "
 ```
 
 ### 常见问题
