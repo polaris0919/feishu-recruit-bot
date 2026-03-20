@@ -223,11 +223,86 @@ def _extract_body(msg):
     return "\n".join(body_parts)
 
 
+_CODE_EXTS = {".py", ".ipynb", ".r", ".sql", ".java", ".cpp", ".go", ".js", ".ts",
+              ".c", ".h", ".cs", ".rb", ".scala", ".kt", ".m", ".sh", ".txt", ".md"}
+
+
+def _extract_code_from_archive(payload, archive_name):
+    """
+    解压 zip 或 rar 压缩包，返回 (inner_file_list, code_text)。
+    inner_file_list: [{"filename": str, "size": int, "is_text": bool}]
+    """
+    import io
+    inner_files = []
+    code_parts = []
+    ext = os.path.splitext(archive_name)[1].lower()
+
+    try:
+        if ext == ".zip":
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    fext = os.path.splitext(name)[1].lower()
+                    data = zf.read(name)
+                    is_text = fext in _CODE_EXTS
+                    inner_files.append({"filename": name, "size": len(data), "is_text": is_text})
+                    if is_text:
+                        try:
+                            text = data.decode("utf-8", errors="replace")
+                            code_parts.append("# File: {}\n{}".format(name, text[:4000]))
+                        except Exception:
+                            pass
+
+        elif ext == ".rar":
+            try:
+                import tempfile
+                from unrar.cffi import rarfile as rar_mod
+                with tempfile.NamedTemporaryFile(suffix=".rar", delete=False) as tmp:
+                    tmp.write(payload)
+                    tmp_path = tmp.name
+                try:
+                    rf = rar_mod.RarFile(tmp_path)
+                    for info in rf.infolist():
+                        name = info.filename
+                        # 跳过目录项（尾斜杠 或 无扩展名的纯目录名）
+                        if name.endswith("/") or name.endswith("\\"):
+                            continue
+                        fext = os.path.splitext(name)[1].lower()
+                        if not fext:
+                            continue
+                        try:
+                            data = rf.read(info)
+                        except Exception:
+                            continue
+                        is_text = fext in _CODE_EXTS
+                        inner_files.append({"filename": name, "size": len(data), "is_text": is_text})
+                        if is_text:
+                            try:
+                                text = data.decode("utf-8", errors="replace")
+                                code_parts.append("# File: {}\n{}".format(name, text[:4000]))
+                            except Exception:
+                                pass
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+            except ImportError:
+                pass
+    except Exception:
+        pass
+
+    return inner_files, "\n\n".join(code_parts)
+
+
 def _extract_attachment_info(msg):
     """
     提取所有附件信息，返回 (attachment_info_list, code_text)。
     attachment_info_list: [{"filename": str, "size": int, "is_text": bool}]
     code_text: 所有可读文本附件合并（用于代码分析，每个文件最多 4000 字符）
+    自动解压 .zip / .rar，读取其中的代码文件。
     """
     attachment_info_list = []
     code_parts = []
@@ -245,6 +320,24 @@ def _extract_attachment_info(msg):
         if not payload:
             continue
         size = len(payload)
+
+        fext = os.path.splitext(fname)[1].lower()
+
+        # 压缩包：自动解压并读取内部代码文件
+        if fext in (".zip", ".rar"):
+            inner_files, archive_code = _extract_code_from_archive(payload, fname)
+            attachment_info_list.append({
+                "filename": fname,
+                "size": size,
+                "is_text": False,
+                "archive_contents": [f["filename"] for f in inner_files],
+            })
+            if archive_code:
+                code_parts.append(
+                    "# Archive: {}\n{}".format(fname, archive_code)
+                )
+            continue
+
         is_text = False
         try:
             charset = part.get_content_charset() or "utf-8"
@@ -262,6 +355,73 @@ def _extract_attachment_info(msg):
         })
     code_text = "\n\n".join(code_parts)
     return attachment_info_list, code_text
+
+
+def _lookup_exam_sent_at_from_sent(imap, candidate_email):
+    """
+    从已发送文件夹查找发给指定候选人的笔试邀请邮件，返回最早那封的实际发送时间字符串。
+    找不到时返回 None。
+    """
+    if not imap or not candidate_email:
+        return None
+    import re as _re
+    import email as _email_lib
+
+    # 提取纯邮箱地址（小写）
+    m = _re.search(r'<([^>]+)>', candidate_email)
+    addr = (m.group(1).strip() if m else candidate_email.strip()).lower()
+
+    exam_subj_kws = ["笔试邀请", "笔试通知", "exam"]
+    found = []
+
+    try:
+        imap.select('"Sent Messages"')
+        status, data = imap.search(None, "ALL")
+        if status != "OK" or not data or not data[0]:
+            return None
+
+        msg_ids = data[0].split()
+        # 只看最近 80 封，避免遍历过多
+        for mid in msg_ids[-80:]:
+            try:
+                status, raw = imap.fetch(mid, "(RFC822.HEADER)")
+                if status != "OK":
+                    continue
+                msg = _email_lib.message_from_bytes(raw[0][1])
+                to_header = _decode_mime_header(msg.get("To") or "").lower()
+                if addr not in to_header:
+                    continue
+                subject = _decode_mime_header(msg.get("Subject") or "")
+                if not any(kw in subject or kw in subject.lower() for kw in exam_subj_kws):
+                    continue
+                date_str = msg.get("Date") or ""
+                if date_str:
+                    found.append(date_str)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    finally:
+        try:
+            imap.select("INBOX")
+        except Exception:
+            pass
+
+    if not found:
+        return None
+    # 返回最早那封（解析后排序，取最小值）
+    import email.utils as _eu
+    def _parse_ts(s):
+        try:
+            return _eu.parsedate_to_datetime(s)
+        except Exception:
+            return None
+    parsed = [(s, _parse_ts(s)) for s in found]
+    parsed = [(s, dt) for s, dt in parsed if dt is not None]
+    if not parsed:
+        return found[0]
+    parsed.sort(key=lambda x: x[1])
+    return parsed[0][0]
 
 
 def _lookup_candidate_by_exam_id(exam_id, tdb):
@@ -375,7 +535,7 @@ def scan_new_replies(auto_mode=False):
                         and not attachment_info_list):
                     continue
 
-                exam_keywords = ["exam-", "笔试邀请", "代码", "作业", "题目", "submission"]
+                exam_keywords = ["exam-", "笔试邀请", "笔试通知", "笔试", "代码", "作业", "题目", "submission"]
                 content_text = (subject + " " + body + " " + code_text).lower()
                 # 附件须为代码/文档类型才算笔试相关（排除 inline 图片）
                 code_ext = (".py", ".ipynb", ".zip", ".rar", ".pdf", ".docx", ".doc",
@@ -401,11 +561,17 @@ def scan_new_replies(auto_mode=False):
                 if not cand_info and db_enabled:
                     cand_info = _lookup_candidate_by_email(sender, _tdb)
 
+                # 从已发送文件夹获取真实发送时间，覆盖 DB 中的 exam_sent_at
+                if cand_info:
+                    actual_sent_at = _lookup_exam_sent_at_from_sent(imap, cand_info.get("candidate_email", ""))
+                    if actual_sent_at:
+                        cand_info = dict(cand_info, exam_sent_at=actual_sent_at)
+
                 # 如果找到候选人，但该候选人不在笔试阶段，说明这封邮件是面试回复邮件
                 # 应由 scan_round1/2_confirmations 处理，笔试扫描直接跳过，避免混淆
                 if cand_info:
                     cand_stage = cand_info.get("stage", "")
-                    exam_stages = {"EXAM_PENDING", "EXAM_REVIEWED"}
+                    exam_stages = {"EXAM_SENT", "EXAM_REVIEWING", "EXAM_REVIEWED"}
                     if cand_stage not in exam_stages:
                         # 非笔试阶段的候选人来信，不作为笔试处理
                         if msg_id_header and db_enabled and _tdb:
