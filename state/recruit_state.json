@@ -1,0 +1,1089 @@
+{
+  "candidates": {
+    "t_ib6vnn": {
+      "talent_id": "t_ib6vnn",
+      "candidate_email": "2493234557@qq.com",
+      "candidate_name": "万峰睿",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-04-01T15:02:41+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-04-02 14:00",
+            "notification_sent_to": "2493234557@qq.com"
+          }
+        },
+        {
+          "at": "2026-04-03T08:26:42+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "2493234557@qq.com",
+            "notes": "",
+            "exam_id": "exam-t_ib6vnn-20260403082637",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-04-08T22:55:36+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 100,
+            "trigger": "daily_exam_review"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:46+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-04-14 10:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "2493234557@qq.com"
+          }
+        }
+      ],
+      "exam_id": "exam-t_ib6vnn-20260403082637",
+      "round1_time": "2026-04-02 14:00",
+      "round2_time": "2026-04-14 10:00",
+      "round2_interviewer": null,
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "186-3244-4177",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 100,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:笔试作答.zip/笔试作答/orderbook_reconstructor.cpp,笔试作答.zip/笔试作答/orderbook_reconstructor.py | 224行有效代码 | 使用pandas | 预审分:100",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.634729+08:00",
+      "exam_sent_at": "2026-04-03T08:26:37+08:00",
+      "round2_invite_sent_at": "2026-04-09T11:48:46.428408+08:00",
+      "round2_confirmed": false,
+      "round2_calendar_event_id": null,
+      "round1_invite_sent_at": "2026-04-01T15:02:41.846330+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": null,
+      "cv_path": null
+    },
+    "t_pf9ku0": {
+      "talent_id": "t_pf9ku0",
+      "candidate_email": "fengxiao1231@gmail.com",
+      "candidate_name": "张子鸣",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-19T21:35:57+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "fengxiao1231@gmail.com",
+            "notes": "",
+            "exam_id": "exam-t_pf9ku0-20260319213554",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-03-24T18:55:02+08:00",
+          "actor": "boss",
+          "action": "force_exam_reviewed",
+          "payload": {
+            "reason": "老板指令：笔试预审满分，直接进入二面流程",
+            "from_stage": "EXAM_SENT"
+          }
+        },
+        {
+          "at": "2026-03-24T18:57:34+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-03-26 16:00",
+            "notification_sent_to": "fengxiao1231@gmail.com"
+          }
+        },
+        {
+          "at": "2026-03-24T18:58:38+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "new_time": "2026-03-27 09:00",
+            "old_time": "2026-03-26 16:00",
+            "confirmed": false,
+            "interviewer": null,
+            "old_calendar_event_id": ""
+          }
+        }
+      ],
+      "exam_id": "exam-t_pf9ku0-20260319213554",
+      "round1_time": null,
+      "round2_time": "2026-03-27 09:00",
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "股票量化研究员",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "佐治亚理工学院计算机科学硕士在读，研究方向为机器学习与量化建模。具备JPMorgan和华泰国际量化研究实习经历，熟悉多因子策略、回测框架开发及数据平台搭建。掌握Python、Java及主流机器学习框架，有AI Agent和推荐系统项目经验。",
+      "school": "佐治亚理工学院",
+      "phone": "15666967772",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 75,
+      "exam_notes": "[自动预审] 用时正常 | 代码文件:致邃投资笔试题-张子鸣.zip/main.cpp,致邃投资笔试题-张子鸣.zip/orderbook.h | 368行有效代码 | 1条警告 | 预审分:75\n[自动预审] 用时超时 | 代码文件:致邃投资笔试题-张子鸣.zip/main.cpp,致邃投资笔试题-张子鸣.zip/orderbook.h | 368行有效代码 | 1条警告 | 预审分:75",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.618423+08:00",
+      "exam_sent_at": "2026-03-19T21:35:54+08:00",
+      "round2_invite_sent_at": "2026-03-24T18:58:38.837288+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "0803fd5e-8eea-4cc0-9107-bd8f429b0261_0",
+      "round1_invite_sent_at": null,
+      "round1_confirmed": false,
+      "round1_calendar_event_id": null,
+      "cv_path": "/home/admin/recruit-workspace/data/media/inbound/股票量化研究员_上海_500-1000元_天_张子鸣_27年应届生---985a5728-47cb-448d-8b91-2f986d6051de.pdf"
+    },
+    "t_d03noa": {
+      "talent_id": "t_d03noa",
+      "candidate_email": "1779890755@qq.com",
+      "candidate_name": "车光明",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-04-01T15:02:29+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-04-02 13:30",
+            "notification_sent_to": "1779890755@qq.com"
+          }
+        },
+        {
+          "at": "2026-04-03T08:26:21+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "1779890755@qq.com",
+            "notes": "",
+            "exam_id": "exam-t_d03noa-20260403082615",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-04-08T18:37:19+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 65,
+            "trigger": "daily_exam_review"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:58+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-04-14 15:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "1779890755@qq.com"
+          }
+        }
+      ],
+      "exam_id": "exam-t_d03noa-20260403082615",
+      "round1_time": "2026-04-02 13:30",
+      "round2_time": "2026-04-14 15:00",
+      "round2_interviewer": null,
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": 1,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "上海交通大学",
+      "phone": "157 2938 8637",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 65,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:笔试题答题-车光明.zip/ΘÇÉτ¼öµò░µì«σÉêµêÉ.ipynb,笔试题答题-车光明.zip/process_tick_data.cpp | 321行有效代码 | 1条警告 | 预审分:65",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.632345+08:00",
+      "exam_sent_at": "2026-04-03T08:26:15+08:00",
+      "round2_invite_sent_at": "2026-04-09T11:48:58.972129+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "6919b35c-e753-415c-9c1e-84a2c3f17971_0",
+      "round1_invite_sent_at": "2026-04-01T15:02:29.989612+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": "f5e277f7-9817-409d-9b46-819df9f6e316_0",
+      "cv_path": null
+    },
+    "t_s59tti": {
+      "talent_id": "t_s59tti",
+      "candidate_email": "haocheng.gyl@gmail.com",
+      "candidate_name": "王浩铖",
+      "stage": "ROUND1_DONE_REJECT_KEEP",
+      "audit": [
+        {
+          "at": "2026-04-01T15:00:26+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-04-08 09:30",
+            "notification_sent_to": "haocheng.gyl@gmail.com"
+          }
+        },
+        {
+          "at": "2026-04-08T13:48:29+08:00",
+          "actor": "system",
+          "action": "round1_result_reject_keep",
+          "payload": {
+            "notes": "一面不通过"
+          }
+        }
+      ],
+      "exam_id": null,
+      "round1_time": "2026-04-08 09:30",
+      "round2_time": null,
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "15108275155",
+      "wechat": null,
+      "round1_notes": "一面不通过",
+      "exam_score": null,
+      "exam_notes": null,
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.633593+08:00",
+      "exam_sent_at": null,
+      "round2_invite_sent_at": null,
+      "round2_confirmed": false,
+      "round2_calendar_event_id": null,
+      "round1_invite_sent_at": "2026-04-01T15:00:26.676696+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": "597c21d9-1087-4214-9347-7af68c9c747c_0",
+      "cv_path": null
+    },
+    "t_33ugtx": {
+      "talent_id": "t_33ugtx",
+      "candidate_email": "yufeizhao@fudan.edu.cn",
+      "candidate_name": "赵宇飞",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-04-01T15:02:56+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-04-02 15:00",
+            "notification_sent_to": "yufeizhao@fudan.edu.cn"
+          }
+        },
+        {
+          "at": "2026-04-03T08:26:36+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "yufeizhao@fudan.edu.cn",
+            "notes": "",
+            "exam_id": "exam-t_33ugtx-20260403082629",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-04-06T08:11:56+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 85,
+            "trigger": "daily_exam_review"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:56+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-04-14 14:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "yufeizhao@fudan.edu.cn"
+          }
+        },
+        {
+          "at": "2026-04-09T16:40:34+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-10 14:00",
+            "old_time": "2026-04-14 14:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        }
+      ],
+      "exam_id": "exam-t_33ugtx-20260403082629",
+      "round1_time": "2026-04-02 15:00",
+      "round2_time": "2026-04-10 14:00",
+      "round2_interviewer": null,
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "15298526406",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 85,
+      "exam_notes": "[自动预审] 用时较慢 | 代码文件:answer.zip/main_cpp.cpp,answer.zip/__MACOSX/._main_cpp.cpp | 347行有效代码 | 使用pandas/numpy | 1条警告 | 预审分:85",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.635929+08:00",
+      "exam_sent_at": "2026-04-03T08:26:29+08:00",
+      "round2_invite_sent_at": "2026-04-09T16:40:34.171952+08:00",
+      "round2_confirmed": false,
+      "round2_calendar_event_id": null,
+      "round1_invite_sent_at": "2026-04-01T15:02:56.662643+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": null,
+      "cv_path": null
+    },
+    "t_vxdj1g": {
+      "talent_id": "t_vxdj1g",
+      "candidate_email": "tianyiran1515@163.com",
+      "candidate_name": "田依冉",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-23T15:17:51+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-26 10:30",
+            "notification_sent_to": "tianyiran1515@163.com"
+          }
+        },
+        {
+          "at": "2026-03-26T10:58:18+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "tianyiran1515@163.com",
+            "notes": "",
+            "exam_id": "exam-t_vxdj1g-20260326105816",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-03-30T21:29:37+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 85,
+            "trigger": "daily_exam_review"
+          }
+        },
+        {
+          "at": "2026-04-09T09:36:28+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "赵宇飞",
+            "round2_time": "2026-04-09 14:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "tianyiran1515@163.com"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:54+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 13:00",
+            "old_time": "2026-04-09 14:00",
+            "confirmed": false,
+            "interviewer": "赵宇飞",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T16:40:14+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-10 15:00",
+            "old_time": "2026-04-14 13:00",
+            "confirmed": false,
+            "interviewer": "赵宇飞",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": "51568dbb-10ac-4017-a742-4044ccbacc26_0"
+          }
+        }
+      ],
+      "exam_id": "exam-t_vxdj1g-20260326105816",
+      "round1_time": "2026-03-26 10:30",
+      "round2_time": "2026-04-10 15:00",
+      "round2_interviewer": "赵宇飞",
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "15665225859",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 85,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:田依冉-笔试提交.zip/╠∩╥└╚╜-▒╩╩╘╠ß╜╗/order_book.cpp,田依冉-笔试提交.zip/╠∩╥└╚╜-▒╩╩╘╠ß╜╗/order_book.h | 330行有效代码 | 使用pandas | 1条警告 | 预审分:85",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.637116+08:00",
+      "exam_sent_at": "2026-03-26T10:58:16+08:00",
+      "round2_invite_sent_at": "2026-04-09T16:40:14.730100+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "bcf15ed9-3f23-4b92-9a3d-1cd6d4fa4e99_0",
+      "round1_invite_sent_at": "2026-03-23T15:17:51.201444+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": "813ecf69-1d0a-4c1f-bf6a-4f17aaf13176_0",
+      "cv_path": null
+    },
+    "t_nxrogq": {
+      "talent_id": "t_nxrogq",
+      "candidate_email": "23300180035@m.fudan.edu.cn",
+      "candidate_name": "袁泽生",
+      "stage": "ROUND1_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-23T15:18:55+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-27 15:00",
+            "notification_sent_to": "23300180035@m.fudan.edu.cn"
+          }
+        },
+        {
+          "at": "2026-03-27T11:01:16+08:00",
+          "actor": "system",
+          "action": "round1_reschedule_requested",
+          "payload": {
+            "reason": "因感冒无法参加，需改期",
+            "old_time": "2026-03-27 15:00",
+            "new_time_proposed": null,
+            "old_calendar_event_id": "1b3c3d1d-7f31-4e21-ad48-e4b502022430_0"
+          }
+        }
+      ],
+      "exam_id": null,
+      "round1_time": "2026-03-27 15:00",
+      "round2_time": null,
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "13818481262",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": null,
+      "exam_notes": null,
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.639445+08:00",
+      "exam_sent_at": null,
+      "round2_invite_sent_at": null,
+      "round2_confirmed": false,
+      "round2_calendar_event_id": null,
+      "round1_invite_sent_at": "2026-03-23T15:18:55.267376+08:00",
+      "round1_confirmed": false,
+      "round1_calendar_event_id": "1b3c3d1d-7f31-4e21-ad48-e4b502022430_0",
+      "cv_path": null
+    },
+    "t_c1qj6e": {
+      "talent_id": "t_c1qj6e",
+      "candidate_email": "25210180005@m.fudan.edu.cn",
+      "candidate_name": "陈俊伟",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-25T08:50:15+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 100,
+            "reason": "修复EXAM_SENT死胡同缺陷，补充阶段推进",
+            "trigger": "manual_backfill"
+          }
+        },
+        {
+          "at": "2026-03-25T08:50:20+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-03-27 14:00",
+            "notification_sent_to": "25210180005@m.fudan.edu.cn"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:41+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-04-14 09:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "25210180005@m.fudan.edu.cn"
+          }
+        },
+        {
+          "at": "2026-04-09T17:04:27+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 14:00",
+            "old_time": "2026-04-14 09:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T17:07:22+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled_confirmed",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 09:00",
+            "old_time": "2026-04-14 14:00",
+            "confirmed": true,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T17:19:17+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-10 14:00",
+            "old_time": "2026-04-14 09:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": "76258a6c-5d5f-474d-a013-089f7cb98158_0"
+          }
+        },
+        {
+          "at": "2026-04-09T17:23:05+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled_confirmed",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 09:00",
+            "old_time": "2026-04-10 14:00",
+            "confirmed": true,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T17:25:02+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 14:00",
+            "old_time": "2026-04-14 09:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": "e764aec2-e311-417d-9a7f-ac3343b0ef1f_0"
+          }
+        },
+        {
+          "at": "2026-04-09T17:27:48+08:00",
+          "actor": "system",
+          "action": "round2_reschedule_requested",
+          "payload": {
+            "reason": "质疑时间错误，要求调整",
+            "old_time": "2026-04-14 14:00",
+            "new_time_proposed": null,
+            "old_calendar_event_id": "e437a98f-ad69-47c0-b7cb-8f3dffa41ead_0"
+          }
+        }
+      ],
+      "exam_id": "exam-t_c1qj6e-20260320143930",
+      "round1_time": "2026-03-13 14:00",
+      "round2_time": "2026-04-14 14:00",
+      "round2_interviewer": null,
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "校园招聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "13651684826",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 100,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:zhisui.py | 83行有效代码 | 使用pandas/numpy | 预审分:100",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.640546+08:00",
+      "exam_sent_at": "2026-03-20T14:39:30+08:00",
+      "round2_invite_sent_at": "2026-04-09T17:25:03.109876+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "f9ba8851-8255-4d72-9b3c-25d15bd5c941_0",
+      "round1_invite_sent_at": null,
+      "round1_confirmed": true,
+      "round1_calendar_event_id": null,
+      "cv_path": null
+    },
+    "t_256klz": {
+      "talent_id": "t_256klz",
+      "candidate_email": "ky.zeng@outlook.com",
+      "candidate_name": "曾科源",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-24T18:55:02+08:00",
+          "actor": "boss",
+          "action": "force_exam_reviewed",
+          "payload": {
+            "reason": "老板指令：笔试预审满分，直接进入二面流程",
+            "from_stage": "EXAM_SENT"
+          }
+        },
+        {
+          "at": "2026-03-24T18:57:22+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-03-26 15:00",
+            "notification_sent_to": "ky.zeng@outlook.com"
+          }
+        },
+        {
+          "at": "2026-03-24T18:58:32+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "new_time": "2026-03-27 11:00",
+            "old_time": "2026-03-26 15:00",
+            "confirmed": false,
+            "interviewer": null,
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-03-27T11:01:55+08:00",
+          "actor": "system",
+          "action": "round2_reschedule_requested",
+          "payload": {
+            "reason": "希望调整面试时间至27号下午或30号",
+            "old_time": "2026-03-27 11:00",
+            "new_time_proposed": null,
+            "old_calendar_event_id": "5ebb960d-dbf4-4205-9a42-ca7e9f85add8_0"
+          }
+        }
+      ],
+      "exam_id": "exam-t_256klz-20260319112534",
+      "round1_time": "2026-03-12 09:30",
+      "round2_time": "2026-03-27 11:00",
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "boss直聘",
+      "position": "量化研究实习生",
+      "education": "软件工程硕士",
+      "work_years": null,
+      "experience": null,
+      "school": "西安交通大学",
+      "phone": "139-9003-6185",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 100,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:笔试答卷-曾科源.rar/笔试答卷-曾科源/trans_order_submit.ipynb,笔试答卷-曾科源.rar/笔试答卷-曾科源/trans_order_submit.py | 368行有效代码 | 使用pandas/numpy | 预审分:100",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.638329+08:00",
+      "exam_sent_at": "2026-03-19T11:25:34+08:00",
+      "round2_invite_sent_at": "2026-03-24T18:58:32.202095+08:00",
+      "round2_confirmed": false,
+      "round2_calendar_event_id": "5ebb960d-dbf4-4205-9a42-ca7e9f85add8_0",
+      "round1_invite_sent_at": null,
+      "round1_confirmed": true,
+      "round1_calendar_event_id": null,
+      "cv_path": null
+    },
+    "t_ukwq3m": {
+      "talent_id": "t_ukwq3m",
+      "candidate_email": "hexiou0104@gmail.com",
+      "candidate_name": "许贺",
+      "stage": "EXAM_SENT",
+      "audit": [
+        {
+          "at": "2026-03-23T15:39:08+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-26 10:00",
+            "notification_sent_to": "hexiou0104@gmail.com"
+          }
+        },
+        {
+          "at": "2026-03-26T10:58:11+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "hexiou0104@gmail.com",
+            "notes": "",
+            "exam_id": "exam-t_ukwq3m-20260326105808",
+            "email_sent": true
+          }
+        }
+      ],
+      "exam_id": "exam-t_ukwq3m-20260326105808",
+      "round1_time": "2026-03-26 10:00",
+      "round2_time": null,
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "中国科学技术大学",
+      "phone": "18258525463",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": null,
+      "exam_notes": null,
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.650628+08:00",
+      "exam_sent_at": "2026-03-26T10:58:08+08:00",
+      "round2_invite_sent_at": null,
+      "round2_confirmed": false,
+      "round2_calendar_event_id": null,
+      "round1_invite_sent_at": "2026-03-23T15:39:08.658662+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": "213dd7e1-19d8-45d8-8e62-532e55a88e88_0",
+      "cv_path": null
+    },
+    "t_24vxn0": {
+      "talent_id": "t_24vxn0",
+      "candidate_email": "zicheng_zhu24@163.com",
+      "candidate_name": "朱子丞",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-24T18:55:02+08:00",
+          "actor": "boss",
+          "action": "force_exam_reviewed",
+          "payload": {
+            "reason": "老板指令：笔试预审满分，直接进入二面流程",
+            "from_stage": "EXAM_SENT"
+          }
+        },
+        {
+          "at": "2026-03-24T18:57:03+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-03-26 14:00",
+            "notification_sent_to": "zicheng_zhu24@163.com"
+          }
+        },
+        {
+          "at": "2026-03-24T18:58:24+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "new_time": "2026-03-27 10:00",
+            "old_time": "2026-03-26 14:00",
+            "confirmed": false,
+            "interviewer": null,
+            "old_calendar_event_id": ""
+          }
+        }
+      ],
+      "exam_id": "exam-t_24vxn0-20260320132532",
+      "round1_time": "2026-03-12 14:00",
+      "round2_time": "2026-03-27 10:00",
+      "round2_interviewer": null,
+      "round2_mode": null,
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "校园招聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "复旦大学",
+      "phone": "17717302029",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 100,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:答案.rar/答案/order_book_rebuild.py | 96行有效代码 | 使用pandas/numpy | 预审分:100",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.652149+08:00",
+      "exam_sent_at": "2026-03-20T13:25:32+08:00",
+      "round2_invite_sent_at": "2026-03-24T18:58:24.345036+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "3522c0a7-80cb-46d5-a9a1-1914bdfed5f3_0",
+      "round1_invite_sent_at": null,
+      "round1_confirmed": true,
+      "round1_calendar_event_id": null,
+      "cv_path": null
+    },
+    "t_hpj6br": {
+      "talent_id": "t_hpj6br",
+      "candidate_email": "1650433216@qq.com",
+      "candidate_name": "李中健",
+      "stage": "ROUND2_SCHEDULED",
+      "audit": [
+        {
+          "at": "2026-03-23T16:14:44+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-25 15:00",
+            "notification_sent_to": "1650433216@qq.com"
+          }
+        },
+        {
+          "at": "2026-03-23T16:20:11+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-25 15:00",
+            "notification_sent_to": "1650433216@qq.com"
+          }
+        },
+        {
+          "at": "2026-03-23T23:20:07+08:00",
+          "actor": "boss",
+          "action": "round1_scheduled",
+          "payload": {
+            "interviewer": "",
+            "round1_time": "2026-03-25 15:00",
+            "notification_sent_to": "1650433216@qq.com"
+          }
+        },
+        {
+          "at": "2026-03-26T11:00:42+08:00",
+          "actor": "system",
+          "action": "round1_pass_and_exam_invite_sent",
+          "payload": {
+            "email": "1650433216@qq.com",
+            "notes": "",
+            "exam_id": "exam-t_hpj6br-20260326110039",
+            "email_sent": true
+          }
+        },
+        {
+          "at": "2026-03-30T10:34:32+08:00",
+          "actor": "system",
+          "action": "exam_reviewed_auto",
+          "payload": {
+            "score": 90,
+            "trigger": "daily_exam_review"
+          }
+        },
+        {
+          "at": "2026-04-09T11:48:49+08:00",
+          "actor": "system",
+          "action": "exam_result_pass_round2_scheduled",
+          "payload": {
+            "mode": "offline",
+            "notes": "",
+            "interviewer": "",
+            "round2_time": "2026-04-14 11:00",
+            "meeting_link": "",
+            "meeting_provider": "",
+            "notification_sent_to": "1650433216@qq.com"
+          }
+        },
+        {
+          "at": "2026-04-09T16:40:21+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-10 13:00",
+            "old_time": "2026-04-14 11:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T16:51:55+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled_confirmed",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-14 11:00",
+            "old_time": "2026-04-10 13:00",
+            "confirmed": true,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": ""
+          }
+        },
+        {
+          "at": "2026-04-09T17:03:40+08:00",
+          "actor": "system",
+          "action": "round2_rescheduled",
+          "payload": {
+            "mode": "offline",
+            "new_time": "2026-04-10 13:00",
+            "old_time": "2026-04-14 11:00",
+            "confirmed": false,
+            "interviewer": null,
+            "meeting_link": "",
+            "meeting_provider": "",
+            "old_calendar_event_id": "118b2ad3-3a2b-4d8d-972c-f270cc2e472e_0"
+          }
+        }
+      ],
+      "exam_id": "exam-t_hpj6br-20260326110039",
+      "round1_time": "2026-03-25 15:00",
+      "round2_time": "2026-04-10 13:00",
+      "round2_interviewer": null,
+      "round2_mode": "offline",
+      "round2_meeting_link": null,
+      "round2_meeting_provider": null,
+      "round2_mode_reason": null,
+      "source": "Boss直聘",
+      "position": "量化研究实习生",
+      "education": "硕士",
+      "work_years": null,
+      "experience": "金融工程背景，熟悉Python和C++，有期货量化策略实习经历",
+      "school": "上海交通大学",
+      "phone": "19888385878",
+      "wechat": null,
+      "round1_notes": null,
+      "exam_score": 90,
+      "exam_notes": "[自动预审] 用时超时 | 代码文件:Test.zip/simulate_orderbook.py | 134行有效代码 | 预审分:90",
+      "round2_score": null,
+      "round2_notes": null,
+      "updated_at": "2026-04-09T17:27:48.648738+08:00",
+      "exam_sent_at": "2026-03-26T11:00:39+08:00",
+      "round2_invite_sent_at": "2026-04-09T17:03:41.162038+08:00",
+      "round2_confirmed": true,
+      "round2_calendar_event_id": "4a6734d6-355b-4694-81ec-eed8dee42ba4_0",
+      "round1_invite_sent_at": "2026-03-23T23:20:08.446200+08:00",
+      "round1_confirmed": true,
+      "round1_calendar_event_id": "0f841494-cbe6-4bee-9cdc-9b624b250ed1_0",
+      "cv_path": null
+    }
+  }
+}

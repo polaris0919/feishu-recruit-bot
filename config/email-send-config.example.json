@@ -1,7 +1,10 @@
 {
-  "SMTP_HOST": "smtp.example.com",
-  "SMTP_PORT": "587",
-  "SMTP_USER": "noreply@example.com",
-  "SMTP_PASS": "your_smtp_password",
-  "SMTP_FROM": "noreply@example.com"
+  "smtp": {
+    "host": "smtp.qq.com",
+    "port": 587,
+    "username": "<YOUR_EMAIL@qq.com>",
+    "password": "<YOUR_SMTP_AUTH_CODE>",
+    "from_email": "<YOUR_EMAIL@qq.com>",
+    "use_tls": true
+  }
 }

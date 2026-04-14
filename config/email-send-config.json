@@ -1,0 +1,10 @@
+{
+  "smtp": {
+    "host": "smtp.exmail.qq.com",
+    "port": 587,
+    "username": "HR@zeusamc.com",
+    "password": "ZStz260312",
+    "from_email": "HR@zeusamc.com",
+    "use_tls": true
+  }
+}
