@@ -1,0 +1,43 @@
+# Local secrets (never commit real JSON configs)
+config/*.json
+!config/*.example.json
+
+# Symlinks at repo root pointing into config/ or state/ (local convenience)
+/recruit_state.json
+/talent-db-config.json
+
+# Optional sibling skill (local symlink into Hermes openclaw-imports)
+skills/email-send
+
+# Runtime state and PII
+state/
+
+# Inbound resumes and exam dumps (PII / large binaries)
+data/media/inbound/*
+!data/media/inbound/.gitkeep
+data/exam_txt/*
+!data/exam_txt/.gitkeep
+
+# Exam materials (often proprietary; keep local only)
+skills/recruit-ops/exam_files/*
+!skills/recruit-ops/exam_files/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Accidental / editor noise
+**/sfully*
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store

@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""向后兼容包装：转发到 interview/cmd_result.py --round 1"""
+import os, sys
+_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
+from interview.cmd_result import main as _main
+
+def main(argv=None):
+    args = argv or sys.argv[1:]
+    return _main(["--round", "1"] + list(args))
+
+if __name__ == "__main__":
+    raise SystemExit(main())

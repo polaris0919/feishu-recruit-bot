@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""候选人 CV 导入测试：cmd_ingest_cv。"""
+import os
+import unittest
+import zipfile
+from unittest import mock
+
+from tests.helpers import call_main, wipe_state
+
+
+class TestIngestCv(unittest.TestCase):
+
+    def setUp(self):
+        wipe_state()
+
+    def _make_docx(self, path, paragraphs):
+        body = "".join(
+            "<w:p><w:r><w:t>{}</w:t></w:r></w:p>".format(p) for p in paragraphs
+        )
+        document_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body>{}</w:body></w:document>".format(body)
+        )
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>"
+        )
+        rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+        )
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("[Content_Types].xml", content_types)
+            zf.writestr("_rels/.rels", rels)
+            zf.writestr("word/document.xml", document_xml)
+
+    _REAL_PDF_TEXT = """高嘉毅
+邮箱: \tgaojiayiptt0710@sjtu.edu.cn \t电话: \t+86 \t13224265710
+求职意向：算法，量化，数据分析
+教育背景
+上海交通大学 \t2025.09 \t– \t至今
+数学科学学院应用统计硕士
+南京大学 \t2019.09 \t- \t2023.06
+数学系信息与计算科学专业学士
+全国大学生数学竞赛 \tA \t类一等奖
+研究/实习经历
+关于 \tA \t股动量策略的风险平价增强研究
+感知算法实习生
+"""
+
+    def test_ingest_cv_supports_docx_new_candidate_preview(self):
+        import cmd_ingest_cv
+
+        docx_path = "/tmp/recruit_test_resume.docx"
+        self._make_docx(docx_path, [
+            "黄琪",
+            "2511391@tongji.edu.cn",
+            "同济大学",
+            "量化研究实习生",
+        ])
+
+        with mock.patch.object(cmd_ingest_cv, "_lookup_existing", return_value=None), \
+             mock.patch.object(cmd_ingest_cv._parse_mod, "_llm_parse_cv_fields", return_value={
+                 "name": "黄琪",
+                 "email": "2511391@tongji.edu.cn",
+                 "education": "博士",
+                 "school": "同济大学",
+                 "position": "量化研究实习生",
+                 "resume_summary": "测试摘要",
+             }):
+            out, err, rc = call_main("cmd_ingest_cv", [
+                "--file-path", docx_path,
+                "--filename", "黄琪简历.docx",
+            ])
+
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("【新候选人 - 待确认】", out)
+        self.assertIn("黄琪", out)
+        self.assertIn("2511391@tongji.edu.cn", out)
+        self.assertIn("已读取本地DOCX", err)
+
+    def test_ingest_cv_supports_real_pdf_preview(self):
+        import cmd_ingest_cv
+
+        pdf_path = "/home/admin/recruit-workspace/data/media/inbound/股票量化研究员_上海_500-1000元_天_高嘉毅_27年应届生-全国大学生数学竞赛A类一等奖---f810f508-a965-40a2-a8b6-1c5e335241a2.pdf"
+        self.assertTrue(os.path.isfile(pdf_path), "测试 PDF 不存在")
+
+        def _fake_llm(cv_text, filename="", pdf_title="", pdf_author=""):
+            self.assertIn("高嘉毅", cv_text)
+            self.assertIn("gaojiayiptt0710@sjtu.edu.cn", cv_text)
+            self.assertIn("全国大学生数学竞赛", cv_text)
+            self.assertIn("上海交通大学", cv_text)
+            self.assertTrue(filename.endswith(".pdf"))
+            return {
+                "name": "高嘉毅",
+                "email": "gaojiayiptt0710@sjtu.edu.cn",
+                "phone": "13224265710",
+                "wechat": None,
+                "position": "股票量化研究员",
+                "education": "硕士",
+                "school": "上海交通大学",
+                "work_years": 0,
+                "source": None,
+                "resume_summary": "上海交大应用统计硕士，具备量化研究与感知算法实习经历，获得全国大学生数学竞赛A类一等奖。",
+            }
+
+        with mock.patch.object(cmd_ingest_cv, "_lookup_existing", return_value=None), \
+             mock.patch.object(cmd_ingest_cv._parse_mod, "_extract_text_from_pdf", return_value=self._REAL_PDF_TEXT), \
+             mock.patch.object(cmd_ingest_cv._parse_mod, "_llm_parse_cv_fields", side_effect=_fake_llm):
+            out, err, rc = call_main("cmd_ingest_cv", [
+                "--file-path", pdf_path,
+                "--filename", os.path.basename(pdf_path),
+            ])
+
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("【新候选人 - 待确认】", out)
+        self.assertIn("高嘉毅", out)
+        self.assertIn("gaojiayiptt0710@sjtu.edu.cn", out)
+        self.assertIn("股票量化研究员", out)
+        self.assertIn("上海交通大学", out)
+        self.assertIn("已读取本地PDF", err)
+        self.assertIn("提取PDF正文", err)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
