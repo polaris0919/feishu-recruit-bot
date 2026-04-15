@@ -12,10 +12,6 @@ import email as email_lib
 from email.header import decode_header
 from typing import Dict, List, Optional, Tuple
 
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 import config as _cfg
 
 _CODE_EXTS = {".py", ".ipynb", ".r", ".sql", ".java", ".cpp", ".go", ".js", ".ts",

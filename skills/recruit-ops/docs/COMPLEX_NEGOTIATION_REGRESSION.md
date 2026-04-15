@@ -2,6 +2,8 @@
 
 > 适用场景：在当前本地真库、当前 Feishu 配置和两个固定测试邮箱下，验证 `daily_exam_review.py` 的真实协商行为，而不是只验证单个命令能否跑通。
 >
+> 执行约定：除非特别说明，下文所有 Python 命令都默认在仓库根目录 `/home/admin/recruit-workspace/skills/recruit-ops` 执行，并使用 `uv run python3 scripts/...` 作为前缀。文中保留 `python3 exam/...`、`python3 common/...` 只是为了突出相对脚本路径。
+>
 > 固定测试邮箱：
 >
 > - `13724161169@137.com`
@@ -142,6 +144,7 @@ WHERE talent_id = '<talent_id>';
 ### 审计与回溯
 
 - `talent_events`
+- `talent_events.event_id`
 - `cmd_status.py` 最近操作摘要
 - Feishu 推送文案
 - 实际邮件 `Message-ID`
@@ -365,7 +368,7 @@ python3 exam/daily_exam_review.py --interview-confirm-only
 
 ### 期望
 
-- 自动执行 `cmd_round1_defer.py`
+- 自动执行 `interview/cmd_defer.py --round 1`
 - `current_stage = WAIT_RETURN`
 - `wait_return_round = 1`
 - `round1_time` 清空

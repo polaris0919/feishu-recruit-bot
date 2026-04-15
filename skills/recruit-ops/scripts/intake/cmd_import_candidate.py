@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 """
 导入已有候选人到人才库，支持指定当前所在流程阶段。
 
@@ -254,6 +247,30 @@ def main(argv=None):
     if needs_exam_id:
         exam_sent_at = exam_sent_at_str or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
+    imported_now = datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    round1_status = "PENDING" if round1_time else "UNSET"
+    round2_status = round2_confirm_status if round2_time else "UNSET"
+    round1_invite_sent_at = None
+    round2_invite_sent_at = None
+
+    if stage in ("ROUND1_SCHEDULED", "ROUND1_DONE_PASS", "EXAM_SENT", "EXAM_REVIEWED",
+                 "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"):
+        round1_status = "CONFIRMED" if round1_time else round1_status
+    if stage == "ROUND1_SCHEDULING" and round1_time:
+        round1_invite_sent_at = imported_now
+    elif round1_status == "CONFIRMED":
+        round1_invite_sent_at = imported_now if round1_time else None
+
+    if stage == "WAIT_RETURN" and wait_return_round == 2:
+        round1_status = "CONFIRMED" if round1_time else round1_status
+
+    if stage == "ROUND2_SCHEDULING" and round2_time:
+        round2_status = "PENDING"
+        round2_invite_sent_at = imported_now
+    elif stage in ("ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"):
+        round2_status = "CONFIRMED" if round2_time else round2_status
+        round2_invite_sent_at = imported_now if round2_time else None
+
     cand = {
         "talent_id":       talent_id,
         "stage":           stage,
@@ -270,41 +287,20 @@ def main(argv=None):
         "experience":      experience,
         "source":          source,
         "round1_time": round1_time,
-        "round1_confirm_status": "PENDING" if round1_time else "UNSET",
+        "round1_confirm_status": round1_status,
+        "round1_invite_sent_at": round1_invite_sent_at,
         "round2_time": round2_time,
-        "round2_confirm_status": round2_confirm_status if round2_time else "UNSET",
+        "round2_confirm_status": round2_status,
+        "round2_invite_sent_at": round2_invite_sent_at,
         "exam_id":         exam_id,
         "exam_sent_at":    exam_sent_at,
     }
 
     save_candidate(talent_id, cand)
 
-    # ── 补充 DB 追踪信息 ────────────────────────────────────────────────────────
+    # ── 输出结果 ───────────────────────────────────────────────────────────────
     import talent_db as _tdb
     db_ok = _tdb._is_enabled()
-    if db_ok:
-        try:
-            if stage == "ROUND1_SCHEDULING":
-                _tdb.save_invite_info(talent_id, 1)
-            elif stage == "ROUND1_SCHEDULED":
-                _tdb.save_invite_info(talent_id, 1)
-                _tdb.mark_confirmed(talent_id, 1)
-            elif stage in ("ROUND1_DONE_PASS", "EXAM_SENT", "EXAM_REVIEWED"):
-                _tdb.mark_confirmed(talent_id, 1)
-            elif stage == "WAIT_RETURN" and wait_return_round == 1:
-                _tdb.mark_wait_return(talent_id, 1)
-            elif stage == "WAIT_RETURN" and wait_return_round == 2:
-                _tdb.mark_confirmed(talent_id, 1)
-                _tdb.mark_wait_return(talent_id, 2)
-            elif stage in ("ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"):
-                _tdb.mark_confirmed(talent_id, 1)
-                _tdb.save_invite_info(talent_id, 2)
-                if round2_confirm_status == "CONFIRMED":
-                    _tdb.mark_confirmed(talent_id, 2)
-        except Exception as _e:
-            print("WARN: DB 追踪信息设置失败: {}".format(_e), file=sys.stderr)
-
-    # ── 输出结果 ───────────────────────────────────────────────────────────────
     hint = _NEXT_STEP.get(stage, "候选人已导入，请根据实际情况推进流程。").format(name=name)
 
     lines = [

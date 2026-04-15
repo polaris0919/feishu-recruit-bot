@@ -59,21 +59,25 @@ def _ensure_loaded():
     feishu_hr_open_id = os.environ.get("FEISHU_HR_OPEN_ID", "").strip()
     feishu_calendar_id = os.environ.get("FEISHU_CALENDAR_ID", "").strip()
 
-    if not (feishu_app_id and feishu_app_secret):
-        try:
-            acct = openclaw["channels"]["feishu"]["accounts"]["feishubot"]
-            feishu_app_id = feishu_app_id or acct.get("appId", "")
-            feishu_app_secret = feishu_app_secret or acct.get("appSecret", "")
-            feishu_boss_open_id = feishu_boss_open_id or acct.get("ownerOpenId", "") or acct.get("bossOpenId", "")
-        except (KeyError, TypeError):
-            pass
+    try:
+        acct = openclaw["channels"]["feishu"]["accounts"]["feishubot"]
+    except (KeyError, TypeError):
+        acct = {}
+
+    feishu_app_id = feishu_app_id or acct.get("appId", "")
+    feishu_app_secret = feishu_app_secret or acct.get("appSecret", "")
+    feishu_boss_open_id = feishu_boss_open_id or acct.get("ownerOpenId", "") or acct.get("bossOpenId", "")
+    feishu_hr_open_id = feishu_hr_open_id or acct.get("hrOpenId", "")
+    feishu_calendar_id = feishu_calendar_id or acct.get("calendarId", "")
 
     _cache["feishu"] = {
         "app_id": feishu_app_id,
         "app_secret": feishu_app_secret,
-        "boss_open_id": feishu_boss_open_id or "ou_f8b858eb86fcb928386e836aa29c18dc",
-        "hr_open_id": feishu_hr_open_id or "ou_06a323aae9f1a208153c1ca0b4c3d281",
-        "calendar_id": feishu_calendar_id or "feishu.cn_vPEnd4yYlOvbjzLuY9Ye2e@group.calendar.feishu.cn",
+        # Fail closed: missing IDs should block side effects instead of
+        # silently sending to a hardcoded production account.
+        "boss_open_id": feishu_boss_open_id,
+        "hr_open_id": feishu_hr_open_id,
+        "calendar_id": feishu_calendar_id,
     }
 
     # --- DashScope LLM ---

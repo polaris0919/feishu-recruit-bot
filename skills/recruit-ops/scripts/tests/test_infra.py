@@ -39,6 +39,50 @@ class TestCoreState(unittest.TestCase):
         import core_state
         self.assertNotIn("round1_score", str(dir(core_state)))
 
+    def test_append_audit_keeps_microsecond_precision(self):
+        import core_state
+
+        cand = {"talent_id": "t_test", "stage": "NEW", "audit": []}
+        core_state.append_audit(cand, "system", "first")
+        core_state.append_audit(cand, "system", "second")
+
+        self.assertEqual(len(cand["audit"]), 2)
+        self.assertTrue(cand["audit"][0]["event_id"])
+        self.assertTrue(cand["audit"][1]["event_id"])
+        self.assertIn(".", cand["audit"][0]["at"])
+        self.assertIn(".", cand["audit"][1]["at"])
+        self.assertNotEqual(cand["audit"][0]["at"], cand["audit"][1]["at"])
+        self.assertNotEqual(cand["audit"][0]["event_id"], cand["audit"][1]["event_id"])
+
+    def test_insert_events_backfills_legacy_event_id_deterministically(self):
+        calls = []
+
+        class _FakeCursor:
+            def execute(self, sql, params):
+                calls.append((sql, params))
+
+        legacy_entry = {
+            "at": "2026-04-15T12:00:00.123456+08:00",
+            "actor": "system",
+            "action": "legacy_event",
+            "payload": {"a": 1},
+        }
+
+        real_talent_db._insert_events(_FakeCursor(), "t_demo", [legacy_entry])
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1][1], "t_demo")
+        self.assertEqual(calls[0][1][0], legacy_entry["event_id"])
+
+        same_entry = {
+            "at": "2026-04-15T12:00:00.123456+08:00",
+            "actor": "system",
+            "action": "legacy_event",
+            "payload": {"a": 1},
+        }
+        same_event_id = real_talent_db._event_values("t_demo", same_entry)[0]
+        self.assertEqual(same_event_id, legacy_entry["event_id"])
+
 
 class TestDbFallback(unittest.TestCase):
 

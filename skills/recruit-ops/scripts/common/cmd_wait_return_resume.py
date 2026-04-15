@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """恢复 WAIT_RETURN 候选人到对应轮次的排期阶段。"""
 import argparse
 import sys
@@ -40,13 +35,6 @@ def main(argv=None):
     target_stage = "ROUND1_SCHEDULING" if round_num == 1 else "ROUND2_SCHEDULING"
     round_label = "一面" if round_num == 1 else "二面"
     candidate_name = cand.get("candidate_name") or talent_id
-
-    import talent_db as _tdb
-    if _tdb._is_enabled():
-        resumed_round = _tdb.resume_wait_return(talent_id)
-        if resumed_round != round_num:
-            print("ERROR: 恢复 WAIT_RETURN 失败", file=sys.stderr)
-            return 1
 
     cand["stage"] = target_stage
     cand["wait_return_round"] = None

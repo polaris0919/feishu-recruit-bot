@@ -18,14 +18,10 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 import zipfile
 import xml.etree.ElementTree as ET
 
-import cmd_parse_cv as _parse_mod
+from intake import cmd_parse_cv as _parse_mod
 from core_state import load_state
 
 _FIELD_LABELS = {

@@ -8,10 +8,6 @@ import re
 import sys
 import os
 
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 import config as _cfg
 from typing import Any, Dict
 

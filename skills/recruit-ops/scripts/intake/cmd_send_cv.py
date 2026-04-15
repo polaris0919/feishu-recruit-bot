@@ -16,10 +16,6 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 import uuid
 
 try:
@@ -29,29 +25,20 @@ except ImportError:
     _urllib_req = None
     _urllib_err = None
 
+import config as _cfg
 from core_state import get_tdb
-from recruit_paths import config_candidates, first_existing
 
 FEISHU_API = "https://open.feishu.cn/open-apis"
-FEISHU_BOSS_OPEN_ID = os.environ.get("FEISHU_BOSS_OPEN_ID", "ou_f8b858eb86fcb928386e836aa29c18dc")
-FEISHU_HR_OPEN_ID   = os.environ.get("FEISHU_HR_OPEN_ID",   "ou_06a323aae9f1a208153c1ca0b4c3d281")
-OPENCLAW_CONFIG     = first_existing(config_candidates("openclaw.json"))
 
 
 # ─── 飞书鉴权 ─────────────────────────────────────────────────────────────────
 
 def _get_feishu_credentials():
-    app_id = os.environ.get("FEISHU_APP_ID", "")
-    app_secret = os.environ.get("FEISHU_APP_SECRET", "")
+    app_id = (_cfg.get("feishu", "app_id") or "").strip()
+    app_secret = (_cfg.get("feishu", "app_secret") or "").strip()
     if app_id and app_secret:
         return app_id, app_secret
-    try:
-        with open(str(OPENCLAW_CONFIG), "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        acct = cfg["channels"]["feishu"]["accounts"]["feishubot"]
-        return acct["appId"], acct["appSecret"]
-    except Exception as e:
-        raise RuntimeError("无法读取飞书应用凭据: " + str(e))
+    raise RuntimeError("未配置飞书应用凭据，请检查 FEISHU_APP_ID / FEISHU_APP_SECRET 或 openclaw 配置。")
 
 
 def _get_tenant_token():
@@ -139,6 +126,8 @@ def _upload_file_to_feishu(token, file_path):
 
 def _send_file_message(token, open_id, file_key):
     # type: (str, str, str) -> None
+    if not (open_id or "").strip():
+        raise RuntimeError("未配置飞书接收人 open_id，已取消发送。")
     payload = json.dumps({
         "receive_id": open_id,
         "msg_type": "file",
@@ -279,7 +268,11 @@ def main(argv=None):
         return 1
 
     # 4. 发送文件消息
-    open_id = FEISHU_HR_OPEN_ID if args.to == "hr" else FEISHU_BOSS_OPEN_ID
+    open_id = (
+        _cfg.get("feishu", "hr_open_id")
+        if args.to == "hr" else
+        _cfg.get("feishu", "boss_open_id")
+    ) or ""
     to_label = "HR" if args.to == "hr" else "老板"
     print("[3/3] 发送文件消息给{}...".format(to_label), file=sys.stderr)
     try:

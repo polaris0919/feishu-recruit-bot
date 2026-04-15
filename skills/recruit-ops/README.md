@@ -1,7 +1,7 @@
 # 飞书招聘管家 — recruit-ops
 
 > **版本**：v3.0（2026-04）  
-> **运行环境**：Hermes Gateway · Python 3.6+ · PostgreSQL 状态真源（开发环境可回退 JSON） · 飞书 WebSocket  
+> **运行环境**：Hermes Gateway · Python 3.10+ · PostgreSQL 状态真源 · 飞书 WebSocket  
 > **代码位置**：`/home/admin/recruit-workspace/skills/recruit-ops/`
 
 > **补充文档**
@@ -37,7 +37,7 @@
 | **邮件协商** | OC 自动向候选人发送面试邀请邮件，LLM 解析候选人回复意图（确认/改期/不明） |
 | **飞书日历** | 仅在候选人最终确认面试时间后，才在老板飞书日历创建日程，老板收到邀请通知 |
 | **超时自动确认** | 候选人 48 小时未回复邮件，系统默认确认，自动创建日历 |
-| **状态持久化** | PostgreSQL 为唯一数据源，开发/测试环境可回退 JSON 文件 |
+| **状态持久化** | PostgreSQL 为唯一数据源；自动化测试通过内存 fake `talent_db` 注入隔离 |
 | **批量导入** | 支持导入已有候选人并指定当前阶段，适合系统上线初期迁移历史数据 |
 
 ### 招聘阶段总览
@@ -336,8 +336,8 @@ docs/
 |------|------|
 | exec 工具 ~3 秒超时 | 邮件/日历全部用 `subprocess.Popen(start_new_session=True)` 后台进程执行 |
 | LLM 调用稳定性 | 直接调用 DashScope API，绕过 Gateway，避免 OOM 影响 |
-| Python 3.6 兼容 | 用 `dateutil.parser.parse()` 替代 `datetime.fromisoformat()`；`stdout=PIPE` 替代 `capture_output=True` |
-| 邮件去重 | `processed_emails` 表记录已处理 Message-ID，防止重复推送 |
+| Python 3.10+ | 代码与测试已使用现代 typing/路径注解语法；时间解析仍统一走 `python-dateutil` |
+| 邮件去重 | 每位候选人的 `*_last_email_id` 邮件游标配合 `talent_events.event_id` 幂等事件记录，避免重复扫描与重复落库 |
 | 时区处理 | 所有时间戳统一以本地 CST（UTC+8）存储和显示 |
 | 状态持久化 | PostgreSQL 为唯一数据源；配置统一由 `lib/config.py` 管理 |
 | 配置管理 | `lib/config.py` 统一加载 JSON 配置文件 + 环境变量，替代分散的配置逻辑 |
@@ -352,50 +352,51 @@ docs/
 ### 候选人管理
 
 ```bash
-cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
+cd /home/admin/recruit-workspace/skills/recruit-ops
 
-# 说明：`interview/` 下的 confirm / result / reschedule 是主实现；
+# 推荐统一前缀：`uv run python3 scripts/...`
+# `interview/` 下的 confirm / result / reschedule 是主实现；
 # `round1/round2` 同名脚本仅保留为兼容别名。
 
 # 录入新候选人
-python3 intake/cmd_new_candidate.py --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
+uv run python3 scripts/intake/cmd_new_candidate.py --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
 
 # 安排一面
-python3 round1/cmd_round1_schedule.py --talent-id t_xxxxx --time "2026-03-25 14:00" --interviewer "老板"
+uv run python3 scripts/round1/cmd_round1_schedule.py --talent-id t_xxxxx --time "2026-03-25 14:00" --interviewer "老板"
 
 # 记录一面结果（通过，进入笔试）
-python3 interview/cmd_result.py --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
+uv run python3 scripts/interview/cmd_result.py --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
 
 # 笔试结果（通过，先发候选人邀请；候选人确认后再创建老板日历）
-python3 exam/cmd_exam_result.py --talent-id t_xxxxx --result pass \
+uv run python3 scripts/exam/cmd_exam_result.py --talent-id t_xxxxx --result pass \
   --round2-time "2026-04-01 14:00" --interviewer "老板"
 
 # 二面结果
-python3 interview/cmd_result.py --talent-id t_xxxxx --round 2 --result pass --notes "技术扎实，沟通流畅"
+uv run python3 scripts/interview/cmd_result.py --talent-id t_xxxxx --round 2 --result pass --notes "技术扎实，沟通流畅"
 
 # 查询状态
-python3 common/cmd_status.py                      # 列出所有候选人
-python3 common/cmd_status.py --talent-id t_xxxxx  # 查单人
+uv run python3 scripts/common/cmd_status.py                      # 列出所有候选人
+uv run python3 scripts/common/cmd_status.py --talent-id t_xxxxx  # 查单人
 ```
 
 ### 邮件扫描
 
 ```bash
 # 扫笔试回复（输出到终端 + 推飞书）
-python3 exam/daily_exam_review.py
+uv run python3 scripts/exam/daily_exam_review.py
 
 # 只扫笔试（cron 模式）
-python3 exam/daily_exam_review.py --auto --exam-only
+uv run python3 scripts/exam/daily_exam_review.py --auto --exam-only
 
 # 只扫面试确认（cron 模式）
-python3 exam/daily_exam_review.py --auto --interview-confirm-only
+uv run python3 scripts/exam/daily_exam_review.py --auto --interview-confirm-only
 ```
 
 ### 飞书通知测试
 
 ```bash
-python3 -c "import feishu as fc; fc.send_text('测试消息')"
-python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
+uv run python3 -c "import feishu as fc; fc.send_text('测试消息')"
+uv run python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 ```
 
 ---
@@ -405,7 +406,7 @@ python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 ### 8.1 前置条件
 
 - Hermes Gateway 已安装并运行
-- Python 3.6+，已安装 `psycopg2`、`python-dateutil`
+- Python 3.10+，推荐先执行 `uv sync`
 - PostgreSQL 数据库（版本 10+）
 - 飞书企业自建应用（WebSocket 模式），已开通权限：
   - `im:message`（收发消息）
@@ -429,11 +430,11 @@ python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 **`/home/admin/recruit-workspace/config/talent-db-config.json`**（复制自 `config/talent-db-config.example.json`；仅在启用 PostgreSQL 时需要）：
 ```json
 {
-  "host": "localhost",
-  "port": 5432,
-  "dbname": "recruit",
-  "user": "recruit_app",
-  "password": "your_db_password"
+  "TALENT_DB_HOST": "localhost",
+  "TALENT_DB_PORT": "5432",
+  "TALENT_DB_NAME": "recruit",
+  "TALENT_DB_USER": "recruit_app",
+  "TALENT_DB_PASSWORD": "your_db_password"
 }
 ```
 
@@ -474,6 +475,8 @@ GRANT ALL PRIVILEGES ON DATABASE recruit TO recruit_app;
 psql "$DATABASE_URL" -f /home/admin/recruit-workspace/skills/recruit-ops/scripts/lib/migrations/schema.sql
 ```
 
+已有数据库在 schema 变更后也应重复执行同一份 `schema.sql`。例如本轮 `talent_events.event_id` 的补列、回填和 `UNIQUE(event_id)` 切换，就是通过重复执行终态 schema 完成迁移。
+
 ### 8.5 Cron 配置
 
 ```bash
@@ -483,14 +486,8 @@ crontab -e
 添加以下内容：
 
 ```cron
-# 招聘系统 - 笔试回复扫描（每 12 小时）
-0 */12 * * * /usr/bin/python3 /path/to/recruit-ops/scripts/exam/daily_exam_review.py --auto --exam-only >> /tmp/recruit-cron.log 2>&1
-
-# 招聘系统 - 面试确认扫描（每 8 小时）
-0 */8 * * * /usr/bin/python3 /path/to/recruit-ops/scripts/exam/daily_exam_review.py --auto --interview-confirm-only >> /tmp/recruit-cron.log 2>&1
-
-# 招聘系统 - 面试催问（每 30 分钟）
-*/30 * * * * /usr/bin/python3 /path/to/recruit-ops/scripts/common/cmd_interview_reminder.py >> /tmp/recruit-cron.log 2>&1
+# 招聘系统 - 推荐统一入口（内部再按安装态模块调度子任务）
+*/5 * * * * /path/to/recruit-ops/.venv/bin/python /path/to/recruit-ops/scripts/cron_runner.py >> /tmp/recruit-cron.log 2>&1
 ```
 
 ### 8.6 笔试附件
@@ -528,20 +525,20 @@ tail -f /tmp/feishu_calendar_bg.log
 ### 手动触发扫描
 
 ```bash
-cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
+cd /home/admin/recruit-workspace/skills/recruit-ops
 
 # 手动扫描所有（笔试 + 面试确认）
-python3 exam/daily_exam_review.py
+uv run python3 scripts/exam/daily_exam_review.py
 
 # 只扫面试确认
-python3 exam/daily_exam_review.py --interview-confirm-only
+uv run python3 scripts/exam/daily_exam_review.py --interview-confirm-only
 ```
 
 ### 查看当前候选人
 
 ```bash
-cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
-python3 common/cmd_status.py
+cd /home/admin/recruit-workspace/skills/recruit-ops
+uv run python3 scripts/common/cmd_status.py
 ```
 
 或直接查数据库：
@@ -550,16 +547,20 @@ PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
   -c "SELECT talent_id, candidate_name, current_stage FROM talents ORDER BY updated_at DESC;"
 ```
 
-### 处理邮件被误标"已处理"
+### 处理邮件游标或审计去重异常
 
 ```bash
-# 查看已处理邮件记录
+# 查看候选人的邮件游标
 PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
-  -c "SELECT message_id, talent_id, processed_at FROM processed_emails ORDER BY processed_at DESC LIMIT 20;"
+  -c "SELECT talent_id, exam_last_email_id, round1_last_email_id, round2_last_email_id FROM talents WHERE talent_id='t_xxxxx';"
 
-# 清除某封邮件的去重记录（让系统重新处理）
+# 将某阶段邮件游标清空，让扫描器重新处理后续邮件
 PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
-  -c "DELETE FROM processed_emails WHERE message_id='<Message-ID>';"
+  -c "UPDATE talents SET round2_last_email_id = NULL WHERE talent_id='t_xxxxx';"
+
+# 查看该候选人最近的审计事件（现已带 event_id）
+PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
+  -c "SELECT event_id, at, actor, action FROM talent_events WHERE talent_id='t_xxxxx' ORDER BY at DESC LIMIT 20;"
 ```
 
 ### 常见问题

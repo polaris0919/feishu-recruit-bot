@@ -1,4 +1,3 @@
-# 本仓库按维护者选择可提交真实 config 与 state；克隆后请自行评估风险。
 # Python
 __pycache__/
 *.py[cod]
@@ -18,3 +17,8 @@ build/
 *.swp
 *~
 .DS_Store
+
+# Local runtime config / state
+config/*.json
+state/*.json
+!config/*.example.json

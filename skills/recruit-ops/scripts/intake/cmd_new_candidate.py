@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 """
 新建候选人脚本。
 系统自动生成 talent_id（t_ + 6位随机字母数字），无需 Agent 手动编造。

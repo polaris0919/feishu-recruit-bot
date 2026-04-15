@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """公共跨阶段操作测试：改期请求 / 改期报告扫描。"""
+import io
 import os
 import subprocess
 import sys
@@ -189,7 +190,7 @@ class TestRescheduleRequest(unittest.TestCase):
             "summary": "候选人暂时不在上海，之后再约",
         })
         self.assertIn("暂缓请求", report)
-        self.assertIn("cmd_round2_defer", report)
+        self.assertIn("interview/cmd_defer.py", report)
         self.assertIn("WAIT_RETURN", report)
 
     def test_reschedule_report_request_online(self):
@@ -314,6 +315,44 @@ class TestRegressionFixes(unittest.TestCase):
         combined = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
         self.assertEqual(proc.returncode, 0, combined)
         self.assertIn("测试模式：已跳过日历操作", proc.stdout)
+
+    def test_defer_main_without_argv_uses_sys_argv(self):
+        import interview.cmd_defer as mod
+
+        buf_out, buf_err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["cmd_defer.py", "--talent-id", "t_demo", "--round", "1"]):
+            old_out, old_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = buf_out, buf_err
+            try:
+                rc = mod.main()
+            finally:
+                sys.stdout, sys.stderr = old_out, old_err
+
+        combined = "\n".join(part for part in (buf_out.getvalue(), buf_err.getvalue()) if part)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("NameError", combined)
+        self.assertNotIn("sys is not defined", combined)
+        self.assertIn("未找到候选人", combined)
+
+    def test_reschedule_main_without_argv_uses_sys_argv(self):
+        import interview.cmd_reschedule as mod
+
+        buf_out, buf_err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", [
+            "cmd_reschedule.py", "--talent-id", "t_demo", "--round", "1", "--time", "2026-04-20 14:00",
+        ]):
+            old_out, old_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = buf_out, buf_err
+            try:
+                rc = mod.main()
+            finally:
+                sys.stdout, sys.stderr = old_out, old_err
+
+        combined = "\n".join(part for part in (buf_out.getvalue(), buf_err.getvalue()) if part)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("NameError", combined)
+        self.assertNotIn("sys is not defined", combined)
+        self.assertIn("未找到候选人", combined)
 
     def test_normalize_new_time_anchors_year_to_current_interview(self):
         import daily_exam_review
@@ -514,7 +553,7 @@ class TestRegressionFixes(unittest.TestCase):
 
     def test_main_reschedule_scan_defer_moves_correct_candidate_to_wait_return(self):
         import daily_exam_review
-        import cmd_round2_defer
+        import interview.cmd_defer as cmd_defer
 
         scenario = ScenarioRunner()
         now = dt.datetime.now(dt.timezone.utc)
@@ -533,8 +572,8 @@ class TestRegressionFixes(unittest.TestCase):
         with scenario.patch_daily_exam_review(
             daily_exam_review,
             llm_side_effect=[{"intent": "defer_until_shanghai", "new_time": None, "summary": "人在美国"}],
-        ), mock.patch.object(cmd_round2_defer, "_send_defer_email", return_value=1234), \
-             mock.patch.object(cmd_round2_defer, "_spawn_calendar_delete_bg", return_value=2345), \
+        ), mock.patch.object(cmd_defer, "_send_defer_email", return_value=1234), \
+             mock.patch.object(cmd_defer, "_spawn_calendar_delete_bg", return_value=2345), \
              mock.patch("subprocess.run", side_effect=subprocess_result_from_call_main):
             rc = daily_exam_review.main(["--auto", "--reschedule-scan-only"])
 
@@ -549,8 +588,7 @@ class TestRegressionFixes(unittest.TestCase):
 
     def test_main_reschedule_scan_defer_matches_multiple_candidates_across_rounds(self):
         import daily_exam_review
-        import cmd_round1_defer
-        import cmd_round2_defer
+        import interview.cmd_defer as cmd_defer
 
         scenario = ScenarioRunner()
         now = dt.datetime.now(dt.timezone.utc)
@@ -575,10 +613,8 @@ class TestRegressionFixes(unittest.TestCase):
                 {"intent": "defer_until_shanghai", "new_time": None, "summary": "一面暂缓"},
                 {"intent": "defer_until_shanghai", "new_time": None, "summary": "二面暂缓"},
             ],
-        ), mock.patch.object(cmd_round1_defer, "_send_defer_email", return_value=1234), \
-             mock.patch.object(cmd_round1_defer, "_spawn_calendar_delete_bg", return_value=2345), \
-             mock.patch.object(cmd_round2_defer, "_send_defer_email", return_value=3456), \
-             mock.patch.object(cmd_round2_defer, "_spawn_calendar_delete_bg", return_value=4567), \
+        ), mock.patch.object(cmd_defer, "_send_defer_email", side_effect=[1234, 3456]), \
+             mock.patch.object(cmd_defer, "_spawn_calendar_delete_bg", side_effect=[2345, 4567]), \
              mock.patch("subprocess.run", side_effect=subprocess_result_from_call_main):
             rc = daily_exam_review.main(["--auto", "--reschedule-scan-only"])
 
@@ -705,7 +741,7 @@ class TestRegressionFixes(unittest.TestCase):
 
     def test_main_reschedule_scan_latest_valid_email_wins_for_confirmed_candidate(self):
         import daily_exam_review
-        import cmd_round2_defer
+        import interview.cmd_defer as cmd_defer
 
         scenario = ScenarioRunner()
         now = dt.datetime.now(dt.timezone.utc)
@@ -731,8 +767,8 @@ class TestRegressionFixes(unittest.TestCase):
         with scenario.patch_daily_exam_review(
             daily_exam_review,
             llm_side_effect=[{"intent": "defer_until_shanghai", "new_time": None, "summary": "最新邮件要求暂缓"}],
-        ), mock.patch.object(cmd_round2_defer, "_send_defer_email", return_value=7777), \
-             mock.patch.object(cmd_round2_defer, "_spawn_calendar_delete_bg", return_value=8888), \
+        ), mock.patch.object(cmd_defer, "_send_defer_email", return_value=7777), \
+             mock.patch.object(cmd_defer, "_spawn_calendar_delete_bg", return_value=8888), \
              mock.patch("subprocess.run", side_effect=subprocess_result_from_call_main):
             rc = daily_exam_review.main(["--auto", "--reschedule-scan-only"])
 

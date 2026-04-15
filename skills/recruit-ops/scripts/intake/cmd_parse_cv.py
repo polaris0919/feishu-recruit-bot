@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 """
 简历 PDF 自动解析脚本。
 

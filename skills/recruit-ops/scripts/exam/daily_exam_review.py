@@ -11,10 +11,6 @@ from __future__ import print_function
 import os
 import sys
 
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 import argparse
 import imaplib
 import json
@@ -34,6 +30,8 @@ _SCRIPTS = scripts_dir()
 
 def _rel_script_py(cmd_base):
     """返回仍以分类目录暴露的脚本相对路径。"""
+    if cmd_base == "cmd_defer":
+        return "interview/cmd_defer.py"
     if cmd_base == "cmd_reschedule_request":
         return "common/{}.py".format(cmd_base)
     if cmd_base.startswith("cmd_round1"):
@@ -857,7 +855,7 @@ def _scan_interview_confirmations(round_num, auto_mode=False):
             timed_out = False
             if invite_sent_at_str:
                 try:
-                    # 兼容 Python 3.6（无 fromisoformat），用 dateutil 解析带时区字符串
+                    # 统一用 dateutil 解析带时区字符串，避免依赖不同 Python 小版本行为
                     from dateutil import parser as _dtparser
                     sent_dt = _dtparser.parse(invite_sent_at_str)
                     # 转为 naive datetime（去掉时区）进行比较
@@ -1080,13 +1078,14 @@ def format_interview_confirmation_report(item):
                  summary=summary, switch_hint=switch_hint)
 
     elif intent == "defer_until_shanghai":
-        defer_cmd = "cmd_round1_defer" if round_num == 1 else "cmd_round2_defer"
+        defer_cmd = "cmd_defer"
         defer_hint = (
             "\n建议执行暂缓：\n"
-            "  python3 {rel} --talent-id {tid} --reason \"{summary}\"\n"
+            "  python3 {rel} --talent-id {tid} --round {round_num} --reason \"{summary}\"\n"
             "处理后状态将进入 WAIT_RETURN，待候选人回国后再恢复安排。"
         ).format(
             tid=talent_id,
+            round_num=round_num,
             summary=summary or "候选人暂时不在国内/上海，之后再约",
             rel=_rel_script_py(defer_cmd),
         )
@@ -1329,14 +1328,15 @@ def format_reschedule_request_report(item):
     new_time = item.get("new_time")
 
     if intent == "defer_until_shanghai":
-        defer_cmd = "cmd_round2_defer" if round_num == 2 else "cmd_round1_defer"
+        defer_cmd = "cmd_defer"
         cmd_hint = (
             "\n建议执行暂缓：\n"
-            "  python3 {rel} --talent-id {tid} --reason \"{summary}\"\n"
+            "  python3 {rel} --talent-id {tid} --round {round_num} --reason \"{summary}\"\n"
             "处理后状态将进入 WAIT_RETURN，待候选人之后方便时再恢复安排。"
         ).format(
             rel=_rel_script_py(defer_cmd),
             tid=talent_id,
+            round_num=round_num,
             summary=summary or "候选人暂不在国内",
         )
         return (
@@ -1630,12 +1630,8 @@ def main(argv=None):
                     ).format(rl=round_label, name=name, tid=talent_id, t=interview_time)
 
                 elif intent == "defer_until_shanghai":
-                    defer_script = os.path.join(
-                        _SCRIPTS,
-                        "round1" if round_num == 1 else "round2",
-                        "cmd_round{}_defer.py".format(round_num),
-                    )
-                    cmd = ["python3", defer_script, "--talent-id", talent_id]
+                    defer_script = os.path.join(_SCRIPTS, "interview", "cmd_defer.py")
+                    cmd = ["python3", defer_script, "--talent-id", talent_id, "--round", str(round_num)]
                     if summary:
                         cmd += ["--reason", summary]
                     try:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 测试公共基础设施：
-  - sys.path 初始化
+  - 安装态模块导入
   - _InMemoryTdb（内存 DB 注入）
   - _call_main / _wipe_state / _new_candidate 工具函数
 """
@@ -11,20 +11,32 @@ import os
 import re
 import sys
 
-_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-
-# ─── sys.path 初始化（各测试文件导入本模块即完成） ────────────────────────────
-sys.path.insert(0, os.path.join(_SCRIPTS, "lib"))
-sys.path.insert(1, _SCRIPTS)
-for _sub in ("intake", "round1", "round2", "exam", "common", "interview"):
-    sys.path.insert(0, os.path.join(_SCRIPTS, _sub))
-
 # ─── 测试环境隔离 ─────────────────────────────────────────────────────────────
 os.environ.pop("TALENT_DB_PASSWORD", None)
 os.environ.setdefault("RECRUIT_DISABLE_SIDE_EFFECTS", "1")
 
 # 先导入真实 talent_db（供 test_infra.py 直接测模块行为）
 import talent_db as real_talent_db  # noqa: E402
+
+_LEGACY_MODULE_ALIASES = {
+    "cmd_new_candidate": "intake.cmd_new_candidate",
+    "cmd_import_candidate": "intake.cmd_import_candidate",
+    "cmd_ingest_cv": "intake.cmd_ingest_cv",
+    "cmd_round1_schedule": "round1.cmd_round1_schedule",
+    "cmd_round1_confirm": "round1.cmd_round1_confirm",
+    "cmd_round1_defer": "round1.cmd_round1_defer",
+    "cmd_round1_result": "round1.cmd_round1_result",
+    "cmd_round2_confirm": "round2.cmd_round2_confirm",
+    "cmd_round2_defer": "round2.cmd_round2_defer",
+    "cmd_round2_reschedule": "round2.cmd_round2_reschedule",
+    "cmd_round2_result": "round2.cmd_round2_result",
+    "cmd_exam_result": "exam.cmd_exam_result",
+    "cmd_status": "common.cmd_status",
+    "cmd_search": "common.cmd_search",
+    "cmd_remove": "common.cmd_remove",
+    "cmd_reschedule_request": "common.cmd_reschedule_request",
+    "cmd_wait_return_resume": "common.cmd_wait_return_resume",
+}
 
 
 # ─── 内存 DB ──────────────────────────────────────────────────────────────────
@@ -222,27 +234,8 @@ sys.modules["talent_db"] = mem_tdb
 def call_main(module_name, argv):
     """In-process 调用模块 main(argv)，返回 (stdout, stderr, returncode)。"""
     import importlib
-    try:
-        mod = importlib.import_module(module_name)
-    except ModuleNotFoundError:
-        leaf_name = module_name.rsplit(".", 1)[-1] + ".py"
-        candidate_paths = [
-            os.path.join(_SCRIPTS, module_name.replace(".", os.sep) + ".py"),
-            os.path.join(_SCRIPTS, leaf_name),
-        ]
-        for _sub in ("intake", "round1", "round2", "exam", "common", "interview"):
-            candidate_paths.append(os.path.join(_SCRIPTS, _sub, leaf_name))
-        module_path = next((p for p in candidate_paths if os.path.isfile(p)), None)
-        if module_path is None:
-            raise
-        spec = importlib.util.spec_from_file_location(
-            "tests.dynamic_{}".format(module_name.replace(".", "_")),
-            module_path,
-        )
-        if spec is None or spec.loader is None:
-            raise
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+    resolved_name = _LEGACY_MODULE_ALIASES.get(module_name, module_name)
+    mod = importlib.import_module(resolved_name)
 
     buf_out, buf_err = io.StringIO(), io.StringIO()
     old_out, old_err = sys.stdout, sys.stderr

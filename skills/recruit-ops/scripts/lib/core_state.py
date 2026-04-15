@@ -11,6 +11,7 @@
     state = load_state()                  # {"candidates": {...}}
 """
 import importlib
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
@@ -59,27 +60,22 @@ def _tdb():
     return importlib.import_module("talent_db")
 
 
-def _db_enabled():
-    # type: () -> bool
-    return _tdb()._is_enabled()
-
-
 def _require_db():
     # type: () -> None
-    if not _db_enabled():
+    if not _tdb()._is_enabled():
         raise RuntimeError("DB 未配置，请检查 talent-db-config.json")
 
 
 def get_tdb():
     # type: () -> Any
     """返回 talent_db 模块（DB 启用时），否则返回 None。"""
-    if _db_enabled():
+    if _tdb()._is_enabled():
         return _tdb()
     return None
 
 
 def _now_iso():
-    return datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+08:00")
 
 
 # ─── 单记录读写（推荐的统一调用风格）─────────────────────────────────────────
@@ -129,6 +125,7 @@ def save_state(state):
 def append_audit(cand, actor, action, payload=None):
     # type: (Dict[str, Any], str, str, Optional[Dict[str, Any]]) -> None
     entry = {
+        "event_id": str(uuid.uuid4()),
         "at": _now_iso(),
         "actor": actor,
         "action": action,
