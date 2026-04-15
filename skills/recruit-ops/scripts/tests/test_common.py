@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """公共跨阶段操作测试：改期请求 / 改期报告扫描。"""
+import os
+import subprocess
 import sys
 import types
 import unittest
@@ -10,6 +12,8 @@ from tests.helpers import call_main, new_candidate, wipe_state
 from core_state import load_candidate
 import talent_db
 from tests.scenario_helpers import ScenarioRunner, make_reply_email, subprocess_result_from_call_main
+
+_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _assert_cli_ok(module_name, argv):
@@ -24,8 +28,9 @@ def _assert_cli_ok(module_name, argv):
 def _setup_confirmed_r2(calendar_event_id=None):
     """创建一个二面已确认的候选人（走真实命令流）。"""
     tid = new_candidate(name="改期测试人", email="resched@example.com")
-    _assert_cli_ok("cmd_round1_result", [
+    _assert_cli_ok("interview.cmd_result", [
         "--talent-id", tid, "--result", "pass", "--email", "resched@example.com",
+        "--round", "1",
     ])
     _assert_cli_ok("cmd_exam_result", [
         "--talent-id", tid, "--result", "pass",
@@ -33,7 +38,7 @@ def _setup_confirmed_r2(calendar_event_id=None):
     ])
     import interview.cmd_confirm as cmd_confirm
     with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=2468):
-        _assert_cli_ok("cmd_round2_confirm", ["--talent-id", tid])
+        _assert_cli_ok("interview.cmd_confirm", ["--talent-id", tid, "--round", "2"])
     if calendar_event_id:
         talent_db.update_calendar_event_id(tid, 2, calendar_event_id)
     return tid
@@ -47,7 +52,7 @@ def _setup_confirmed_r1(calendar_event_id=None):
     ])
     import interview.cmd_confirm as cmd_confirm
     with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=1357):
-        _assert_cli_ok("cmd_round1_confirm", ["--talent-id", tid])
+        _assert_cli_ok("interview.cmd_confirm", ["--talent-id", tid, "--round", "1"])
     if calendar_event_id:
         talent_db.update_calendar_event_id(tid, 1, calendar_event_id)
     return tid
@@ -154,7 +159,7 @@ class TestRescheduleRequest(unittest.TestCase):
         self.assertIn("改期请求", report)
         self.assertIn("t_demo", report)
         self.assertIn("2026-04-18 14:00", report)
-        self.assertIn("cmd_round2_reschedule", report)
+        self.assertIn("interview/cmd_reschedule.py", report)
 
     def test_reschedule_report_without_new_time(self):
         import daily_exam_review
@@ -169,7 +174,7 @@ class TestRescheduleRequest(unittest.TestCase):
             "summary": "有事需要改期",
         })
         self.assertIn("改期请求", report)
-        self.assertIn("cmd_round1_reschedule", report)
+        self.assertIn("interview/cmd_reschedule.py", report)
         self.assertIn("YYYY-MM-DD HH:MM", report)
 
     def test_reschedule_report_defer_until_shanghai(self):
@@ -199,7 +204,7 @@ class TestRescheduleRequest(unittest.TestCase):
             "summary": "候选人希望改为线上面试",
         })
         self.assertIn("线上面试请求", report)
-        self.assertIn("cmd_round2_reschedule", report)
+        self.assertIn("interview/cmd_reschedule.py", report)
         self.assertIn("线上面试", report)
 
     def test_main_auto_handles_reschedule_scan(self):
@@ -264,6 +269,137 @@ class TestRescheduleRequest(unittest.TestCase):
         self.assertEqual(rc2, 0)
         scenario.assert_boss_pending(tid, 2, "2026-04-20 14:00")
         self.assertTrue(scenario.sent_reports)
+
+
+class TestRegressionFixes(unittest.TestCase):
+
+    def setUp(self):
+        wipe_state()
+
+    def test_finalize_script_direct_run_imports_lib_modules_first(self):
+        script = os.path.join(_SCRIPTS, "common", "cmd_finalize_interview_time.py")
+        env = os.environ.copy()
+        env["RECRUIT_DISABLE_DB"] = "1"
+        env.pop("TALENT_DB_PASSWORD", None)
+
+        proc = subprocess.run(
+            ["python3", script, "--talent-id", "t_demo", "--round", "1"],
+            cwd=_SCRIPTS,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        combined = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("SyntaxError", combined)
+        self.assertNotIn("invalid syntax", combined)
+        self.assertIn("DB 未配置", combined)
+
+    def test_calendar_cli_can_run_as_standalone_script(self):
+        script = os.path.join(_SCRIPTS, "lib", "feishu", "calendar_cli.py")
+        env = os.environ.copy()
+        env["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
+
+        proc = subprocess.run(
+            ["python3", script, "--talent-id", "t_demo", "--round2-time", "2026-04-20 14:00"],
+            cwd=_SCRIPTS,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        combined = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("测试模式：已跳过日历操作", proc.stdout)
+
+    def test_normalize_new_time_anchors_year_to_current_interview(self):
+        import daily_exam_review
+
+        normalized = daily_exam_review._normalize_new_time(
+            "2024-05-12 10:00",
+            "5月12日上午10:00可以吗？",
+            "2026-05-10 14:00",
+        )
+        self.assertEqual(normalized, "2026-05-12 10:00")
+
+    def test_main_interview_scan_confirm_with_new_time_updates_pending_time(self):
+        import daily_exam_review
+
+        scenario = ScenarioRunner()
+        now = dt.datetime.now(dt.timezone.utc)
+        tid = scenario.create_round2_pending_candidate(
+            name="确认新时间人", email="confirm-new-time@example.com", round2_time="2026-04-20 14:00"
+        )
+        scenario.set_invite_sent_at(tid, 2, (now - dt.timedelta(hours=1)).isoformat())
+        scenario.mailbox.deliver_now(make_reply_email(
+            "confirm-new-time@example.com",
+            "Re: 二面安排",
+            "4月24日下午三点可以，我确认这个时间。",
+            "<confirm-new-time@test>",
+            sent_at=now,
+        ))
+
+        with scenario.patch_daily_exam_review(
+            daily_exam_review,
+            llm_side_effect=[{
+                "intent": "confirm",
+                "new_time": "2024-04-24 15:00",
+                "summary": "确认参加4月24日下午三点面试",
+            }],
+        ):
+            rc = daily_exam_review.main(["--auto", "--interview-confirm-only"])
+
+        self.assertEqual(rc, 0)
+        scenario.assert_boss_pending(tid, 2, "2026-04-24 15:00")
+        cand = scenario.candidate(tid)
+        self.assertEqual(cand["round2_last_email_id"], "<confirm-new-time@test>")
+
+    def test_scan_interview_confirmations_does_not_reprocess_older_mail_after_cursor(self):
+        import daily_exam_review
+
+        scenario = ScenarioRunner()
+        now = dt.datetime.now(dt.timezone.utc)
+        tid = scenario.create_round2_pending_candidate(
+            name="游标稳定人", email="cursor-stable@example.com", round2_time="2026-04-20 14:00"
+        )
+        scenario.set_invite_sent_at(tid, 2, (now - dt.timedelta(hours=1)).isoformat())
+        scenario.mailbox.deliver_now(make_reply_email(
+            "cursor-stable@example.com",
+            "Re: 二面安排",
+            "我可以参加。",
+            "<older-confirm@test>",
+            sent_at=now - dt.timedelta(minutes=10),
+        ))
+        scenario.mailbox.deliver_now(make_reply_email(
+            "cursor-stable@example.com",
+            "Re: 二面安排",
+            "我确认最新这封邮件里的时间。",
+            "<newer-confirm@test>",
+            sent_at=now,
+        ))
+
+        with scenario.patch_daily_exam_review(
+            daily_exam_review,
+            llm_side_effect=[{"intent": "confirm", "new_time": None, "summary": "确认参加"}],
+        ):
+            first_results = daily_exam_review._scan_interview_confirmations(round_num=2, auto_mode=True)
+
+        self.assertEqual(len(first_results), 1)
+        self.assertEqual(first_results[0]["message_id"], "<newer-confirm@test>")
+        self.assertEqual(scenario.candidate(tid)["round2_last_email_id"], "<newer-confirm@test>")
+
+        with scenario.patch_daily_exam_review(daily_exam_review), \
+             mock.patch.object(
+                 daily_exam_review,
+                 "_llm_analyze_reply",
+                 side_effect=AssertionError("should not reprocess older mail"),
+             ):
+            second_results = daily_exam_review._scan_interview_confirmations(round_num=2, auto_mode=True)
+
+        self.assertEqual(second_results, [])
 
     def test_main_reschedule_scan_uses_real_scan_and_calls_reschedule_request(self):
         import daily_exam_review
@@ -492,11 +628,11 @@ class TestRescheduleRequest(unittest.TestCase):
         scenario.assert_boss_pending(tid_b, 2, "2026-04-23 16:00")
 
         with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=2468):
-            out, err, rc = call_main("cmd_round2_confirm", ["--talent-id", tid_a])
+            out, err, rc = call_main("interview.cmd_confirm", ["--talent-id", tid_a, "--round", "2"])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
 
-        out, err, rc = call_main("cmd_round2_reschedule", [
-            "--talent-id", tid_b, "--time", "2026-04-23 16:00", "--no-confirm",
+        out, err, rc = call_main("interview.cmd_reschedule", [
+            "--talent-id", tid_b, "--round", "2", "--time", "2026-04-23 16:00", "--no-confirm",
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
 
@@ -549,8 +685,8 @@ class TestRescheduleRequest(unittest.TestCase):
 
         out, err, rc = call_main("cmd_wait_return_resume", ["--talent-id", tid])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
-        out, err, rc = call_main("cmd_round2_reschedule", [
-            "--talent-id", tid, "--time", "2026-04-25 11:00", "--no-confirm",
+        out, err, rc = call_main("interview.cmd_reschedule", [
+            "--talent-id", tid, "--round", "2", "--time", "2026-04-25 11:00", "--no-confirm",
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
 
@@ -636,6 +772,43 @@ class TestRescheduleRequest(unittest.TestCase):
         self.assertEqual(cand["round2_confirm_status"], "CONFIRMED")
         self.assertEqual(cand["round2_time"], "2026-04-20 14:00")
         scenario.assert_last_email_id_updated(tid, "round2", "<online-only@test>")
+
+    def test_main_reschedule_scan_same_time_mail_does_not_rollback_state(self):
+        import daily_exam_review
+
+        scenario = ScenarioRunner()
+        now = dt.datetime.now(dt.timezone.utc)
+        tid = scenario.create_confirmed_round2_candidate(
+            name="同时间干扰人", email="same-time@example.com", round2_time="2026-04-20 14:00"
+        )
+        scenario.set_invite_sent_at(tid, 2, (now - dt.timedelta(hours=1)).isoformat())
+        scenario.mailbox.deliver_now(make_reply_email(
+            "same-time@example.com",
+            "Re: 二面安排",
+            "这边时间没变化，还是 2026-04-20 14:00。",
+            "<same-time@test>",
+            sent_at=now,
+        ))
+
+        with scenario.patch_daily_exam_review(
+            daily_exam_review,
+            llm_side_effect=[{
+                "intent": "reschedule",
+                "new_time": "2026-04-20 14:00",
+                "summary": "希望维持 2026-04-20 14:00",
+            }],
+        ), mock.patch("subprocess.run") as run_mock:
+            rc = daily_exam_review.main(["--auto", "--reschedule-scan-only"])
+
+        self.assertEqual(rc, 0)
+        run_mock.assert_not_called()
+        cand = scenario.candidate(tid)
+        self.assertEqual(cand["stage"], "ROUND2_SCHEDULED")
+        self.assertEqual(cand["round2_confirm_status"], "CONFIRMED")
+        self.assertEqual(cand["round2_time"], "2026-04-20 14:00")
+        scenario.assert_last_email_id_updated(tid, "round2", "<same-time@test>")
+        self.assertTrue(scenario.sent_reports)
+        self.assertIn("未自动撤销确认", scenario.sent_reports[-1])
 
     def test_wait_return_resume_round1(self):
         tid = _setup_confirmed_r1()
