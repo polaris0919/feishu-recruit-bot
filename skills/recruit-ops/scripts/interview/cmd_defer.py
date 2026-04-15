@@ -6,6 +6,7 @@
 """
 
 import argparse
+import sys
 from core_state import append_audit, load_candidate, save_candidate
 from bg_helpers import send_bg_email, delete_calendar
 

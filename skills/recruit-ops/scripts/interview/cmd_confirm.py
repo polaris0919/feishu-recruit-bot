@@ -6,6 +6,7 @@
 """
 
 import argparse
+import sys
 from bg_helpers import spawn_calendar
 from core_state import load_candidate
 

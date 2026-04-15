@@ -55,10 +55,13 @@ def send_text(text, open_id=None):
     if side_effects_disabled():
         return True
     feishu = _cfg.get("feishu")
-    open_id = open_id or feishu.get("boss_open_id", "")
+    open_id = (open_id or feishu.get("boss_open_id", "") or "").strip()
     client = _get_client()
     if not client:
         print("[feishu] 未配置 app_id/app_secret，消息未发送", file=sys.stderr)
+        return False
+    if not open_id:
+        print("[feishu] 未配置 open_id，消息未发送", file=sys.stderr)
         return False
     req = CreateMessageRequest.builder() \
         .receive_id_type("open_id") \
@@ -104,11 +107,14 @@ def delete_calendar_event_by_id(event_id):
     if not client:
         return False
     feishu = _cfg.get("feishu")
-    calendar_id = feishu.get("calendar_id", "")
+    calendar_id = (feishu.get("calendar_id", "") or "").strip()
+    if not calendar_id:
+        print("[feishu] 未配置 calendar_id，无法删除日历事件", file=sys.stderr)
+        return False
     req = DeleteCalendarEventRequest.builder() \
         .calendar_id(calendar_id) \
         .event_id(event_id) \
-        .need_notification(False) \
+        .need_notification("false") \
         .build()
     resp = client.calendar.v4.calendar_event.delete(req)
     return resp.success()
@@ -129,11 +135,13 @@ def create_interview_event(
             talent_id, round_num, interview_time)
 
     feishu = _cfg.get("feishu")
-    boss_open_id = feishu.get("boss_open_id", "")
-    calendar_id = feishu.get("calendar_id", "")
+    boss_open_id = (feishu.get("boss_open_id", "") or "").strip()
+    calendar_id = (feishu.get("calendar_id", "") or "").strip()
     client = _get_client()
     if not client:
         raise RuntimeError("飞书未配置 app_id/app_secret")
+    if not calendar_id:
+        raise RuntimeError("飞书未配置 calendar_id")
 
     if old_event_id:
         delete_calendar_event_by_id(old_event_id)
