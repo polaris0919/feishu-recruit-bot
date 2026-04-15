@@ -4,6 +4,10 @@
 > **运行环境**：Hermes Gateway · Python 3.6+ · PostgreSQL 状态真源（开发环境可回退 JSON） · 飞书 WebSocket  
 > **代码位置**：`/home/admin/recruit-workspace/skills/recruit-ops/`
 
+> **补充文档**
+> - `docs/CLI_REFERENCE.md`：CLI 命令总参考
+> - `docs/COMPLEX_NEGOTIATION_REGRESSION.md`：复杂协商真实回归清单
+
 ---
 
 ## 目录
@@ -285,16 +289,17 @@ LLM Agent（qwen3-max，阿里云 DashScope）
       │  exec tool 调用 Python 脚本
       ▼
 scripts/
+  ├── tests/
+  │   ├── run_all.py                   # 测试聚合入口
+  │   └── test_*.py
   ├── lib/                             # 公共模块
   │   ├── config.py                    # 统一配置加载（DB/飞书/邮件/DashScope）
   │   ├── core_state.py                # 状态机、阶段定义、审计
   │   ├── talent_db.py                 # PostgreSQL 读写（RealDictCursor、参数化 round）
-  │   ├── feishu_client.py             # 统一飞书 SDK（IM + 日历）
-  │   ├── feishu_notify.py             # 向后兼容 wrapper → feishu_client
-  │   ├── feishu_calendar.py           # 向后兼容 wrapper → feishu_client
-  │   ├── base_command.py              # CLI 命令基类，消除样板代码
-  │   ├── db_migrations.py             # 正式 DB 迁移管理
-  │   ├── migrations/                  # SQL 迁移文件（001_initial.sql …）
+  │   ├── feishu/                      # 飞书 SDK 封装（IM + 日历 + CLI）
+  │   ├── bg_helpers.py                # 后台邮件 / 日历子进程封装
+  │   ├── migrations/
+  │   │   └── schema.sql               # 当前数据库终态定义（手动初始化用）
   │   ├── recruit_paths.py
   │   └── …
   ├── intake/                          # 简历与候选人录入
@@ -310,8 +315,12 @@ scripts/
   │   └── …
   ├── common/                          # 查询、删除、催问等横切命令
   ├── cron_runner.py                   # crontab 入口
-  ├── test_all.py
+  ├── trigger_cron_now.py              # 手动提前触发 cron
   └── …
+
+docs/
+  ├── CLI_REFERENCE.md
+  └── COMPLEX_NEGOTIATION_REGRESSION.md
 
 外部依赖：
   /home/admin/recruit-workspace/config/recruit-email-config.json   # IMAP/SMTP 邮箱配置
@@ -332,7 +341,7 @@ scripts/
 | 时区处理 | 所有时间戳统一以本地 CST（UTC+8）存储和显示 |
 | 状态持久化 | PostgreSQL 为唯一数据源；配置统一由 `lib/config.py` 管理 |
 | 配置管理 | `lib/config.py` 统一加载 JSON 配置文件 + 环境变量，替代分散的配置逻辑 |
-| DB 模式 | `RealDictCursor` 消除 `row[N]` 硬编码；正式迁移机制 (`lib/migrations/`) |
+| DB 模式 | `RealDictCursor` 消除 `row[N]` 硬编码；数据库结构由 `lib/migrations/schema.sql` 维护 |
 | 脚本合并 | round1/round2 同类脚本合并到 `interview/`，接受 `--round 1\|2` 参数；旧路径通过 wrapper 保持兼容 |
 | 模块间通信 | 关键路径由 `subprocess` 调用改为直接函数调用，减少 fork 开销和进程隔离问题 |
 
@@ -345,6 +354,9 @@ scripts/
 ```bash
 cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
 
+# 说明：`interview/` 下的 confirm / result / reschedule 是主实现；
+# `round1/round2` 同名脚本仅保留为兼容别名。
+
 # 录入新候选人
 python3 intake/cmd_new_candidate.py --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
 
@@ -352,14 +364,14 @@ python3 intake/cmd_new_candidate.py --template "【新候选人】\n姓名：张
 python3 round1/cmd_round1_schedule.py --talent-id t_xxxxx --time "2026-03-25 14:00" --interviewer "老板"
 
 # 记录一面结果（通过，进入笔试）
-python3 round1/cmd_round1_result.py --talent-id t_xxxxx --result pass --email zhangsan@example.com
+python3 interview/cmd_result.py --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
 
 # 笔试结果（通过，先发候选人邀请；候选人确认后再创建老板日历）
 python3 exam/cmd_exam_result.py --talent-id t_xxxxx --result pass \
   --round2-time "2026-04-01 14:00" --interviewer "老板"
 
 # 二面结果
-python3 round2/cmd_round2_result.py --talent-id t_xxxxx --result pass --notes "技术扎实，沟通流畅"
+python3 interview/cmd_result.py --talent-id t_xxxxx --round 2 --result pass --notes "技术扎实，沟通流畅"
 
 # 查询状态
 python3 common/cmd_status.py                      # 列出所有候选人
@@ -382,8 +394,8 @@ python3 exam/daily_exam_review.py --auto --interview-confirm-only
 ### 飞书通知测试
 
 ```bash
-python3 -c "import feishu_client as fc; fc.send_text('测试消息')"
-python3 -c "import feishu_client as fc; fc.send_text_to_hr('发给HR的消息')"
+python3 -c "import feishu as fc; fc.send_text('测试消息')"
+python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 ```
 
 ---
@@ -455,12 +467,11 @@ CREATE USER recruit_app WITH PASSWORD 'your_password';
 GRANT ALL PRIVILEGES ON DATABASE recruit TO recruit_app;
 ```
 
-建表由正式迁移机制自动完成（`lib/db_migrations.py`），首次连接时自动执行 `lib/migrations/*.sql`：
+首次建库时，直接执行当前终态 schema 文件：
 
 ```bash
-# 手动触发迁移（或让任意脚本首次连接 DB 即可）
-cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
-python3 -c "import talent_db; print('DB 初始化完成')"
+# 手动初始化 schema
+psql "$DATABASE_URL" -f /home/admin/recruit-workspace/skills/recruit-ops/scripts/lib/migrations/schema.sql
 ```
 
 ### 8.5 Cron 配置

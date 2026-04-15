@@ -94,8 +94,9 @@ class ScenarioRunner:
     def create_round2_pending_candidate(self, name="场景候选人", email="scenario@example.com",
                                         round2_time="2026-04-20 14:00"):
         tid = new_candidate(name=name, email=email)
-        call_main("cmd_round1_result", [
+        call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", email,
+            "--round", "1",
         ])
         call_main("cmd_exam_result", [
             "--talent-id", tid, "--result", "pass", "--round2-time", round2_time,
@@ -113,7 +114,7 @@ class ScenarioRunner:
         tid = self.create_round2_pending_candidate(name=name, email=email, round2_time=round2_time)
         import interview.cmd_confirm as cmd_confirm
         with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=2468):
-            call_main("cmd_round2_confirm", ["--talent-id", tid])
+            call_main("interview.cmd_confirm", ["--talent-id", tid, "--round", "2"])
         return tid
 
     def create_confirmed_round1_candidate(self, name="已确认一面人", email="confirmed-r1@example.com",
@@ -121,7 +122,7 @@ class ScenarioRunner:
         tid = self.create_round1_pending_candidate(name=name, email=email, round1_time=round1_time)
         import interview.cmd_confirm as cmd_confirm
         with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=1357):
-            call_main("cmd_round1_confirm", ["--talent-id", tid])
+            call_main("interview.cmd_confirm", ["--talent-id", tid, "--round", "1"])
         return tid
 
     def set_invite_sent_at(self, talent_id, round_num, invite_sent_at):

@@ -5,17 +5,23 @@ import sys
 import types
 import unittest
 import datetime as dt
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email import encoders
+from email.utils import format_datetime
 from unittest import mock
 
 from tests.helpers import call_main, new_candidate, wipe_state
-from tests.scenario_helpers import ScenarioRunner, make_reply_email
+from tests.scenario_helpers import FakeMailbox, ScenarioRunner, make_reply_email
 
 
 def _setup_exam():
     """公共前置：候选人过一面，进入 EXAM_SENT。"""
     tid = new_candidate()
-    call_main("cmd_round1_result", [
+    call_main("interview.cmd_result", [
         "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+        "--round", "1",
     ])
     return tid
 
@@ -208,6 +214,27 @@ class TestExamPrereview(unittest.TestCase):
 
 class TestDailyExamReview(unittest.TestCase):
 
+    def setUp(self):
+        wipe_state()
+
+    @staticmethod
+    def _make_exam_mail(from_addr, subject, body, message_id, sent_at, attachments):
+        msg = MIMEMultipart()
+        msg["From"] = from_addr
+        msg["To"] = "recruit@test.com"
+        msg["Subject"] = subject
+        msg["Message-ID"] = message_id
+        msg["Date"] = format_datetime(sent_at)
+        msg.attach(MIMEText(body, _charset="utf-8"))
+        for filename, content, mime in attachments:
+            maintype, subtype = mime.split("/", 1)
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(content.encode("utf-8"))
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+        return msg.as_bytes()
+
     def test_scan_no_imap_config(self):
         """无 IMAP 配置时应静默返回空列表。"""
         import daily_exam_review
@@ -218,6 +245,61 @@ class TestDailyExamReview(unittest.TestCase):
         finally:
             if old_host:
                 os.environ["RECRUIT_EXAM_IMAP_HOST"] = old_host
+
+    def test_scan_new_replies_skips_old_exam_email_before_exam_sent_at(self):
+        import daily_exam_review
+
+        tid = new_candidate(name="笔试旧邮件过滤人", email="examfilter@example.com")
+        out, err, rc = call_main("interview.cmd_result", [
+            "--talent-id", tid,
+            "--result", "pass",
+            "--email", "examfilter@example.com",
+            "--skip-email",
+            "--round", "1",
+        ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+
+        from core_state import load_candidate
+        cand = load_candidate(tid)
+        exam_id = cand["exam_id"]
+        exam_sent_at = dt.datetime.fromisoformat(cand["exam_sent_at"])
+
+        mailbox = FakeMailbox()
+        mailbox.deliver_now(self._make_exam_mail(
+            "examfilter@example.com",
+            "Re: {} submission".format(exam_id),
+            "这是旧邮件\n\n{}".format(exam_id),
+            "<exam-old@test>",
+            exam_sent_at - dt.timedelta(hours=2),
+            [
+                ("answer.py", "print('old')\n", "text/plain"),
+                ("result.csv", "x\n1\n", "text/csv"),
+            ],
+        ))
+        mailbox.deliver_now(self._make_exam_mail(
+            "examfilter@example.com",
+            "Re: {} submission".format(exam_id),
+            "这是新邮件\n\n{}".format(exam_id),
+            "<exam-real@test>",
+            exam_sent_at + dt.timedelta(hours=3),
+            [
+                ("answer.py", "import pandas as pd\nprint('real')\n", "text/plain"),
+                ("result.csv", "x\n2\n", "text/csv"),
+            ],
+        ))
+
+        with mock.patch.object(daily_exam_review, "connect_imap", side_effect=mailbox.connect), \
+             mock.patch.object(daily_exam_review, "_lookup_exam_sent_at_from_sent", return_value=None):
+            results = daily_exam_review.scan_new_replies(auto_mode=True)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["message_id"], "<exam-real@test>")
+
+        cand = load_candidate(tid)
+        self.assertEqual(cand["exam_last_email_id"], "<exam-real@test>")
+        self.assertEqual(cand["stage"], "EXAM_REVIEWED")
+        reviewed = [ev for ev in cand["audit"] if ev.get("action") == "exam_reviewed_auto"]
+        self.assertEqual(len(reviewed), 1)
 
     def test_format_report_uses_prereview(self):
         """format_report 应优先使用 prereview.report_text。"""
@@ -261,7 +343,7 @@ class TestDailyExamReview(unittest.TestCase):
             "summary": "候选人表示人在海外，希望改为线上面试",
         })
         self.assertIn("希望改为线上面试", report)
-        self.assertIn("cmd_round2_reschedule", report)
+        self.assertIn("interview/cmd_reschedule.py", report)
 
     def test_defer_report_guides_boss_to_wait_return(self):
         import daily_exam_review

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""二面相关测试：cmd_round2_result / cmd_round2_reschedule / cmd_round2_confirm / cmd_round2_defer。"""
+"""二面相关测试：统一面试命令 + round2 兼容别名 / defer。"""
 import sys
 import types
 import unittest
@@ -12,8 +12,9 @@ from core_state import load_candidate
 def _setup_r2():
     """候选人走完一面 + 笔试，进入 ROUND2_SCHEDULING。"""
     tid = new_candidate()
-    call_main("cmd_round1_result", [
+    call_main("interview.cmd_result", [
         "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+        "--round", "1",
     ])
     call_main("cmd_exam_result", [
         "--talent-id", tid, "--result", "pass",
@@ -27,9 +28,9 @@ def _setup_confirmed_r2():
     tid = _setup_r2()
     from interview import cmd_confirm as _confirm_mod
     with mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468):
-        out, err, rc = call_main("cmd_round2_confirm", ["--talent-id", tid])
+        out, err, rc = call_main("interview.cmd_confirm", ["--talent-id", tid, "--round", "2"])
     if rc != 0:
-        raise AssertionError("cmd_round2_confirm 应成功 out={} err={}".format(out, err))
+        raise AssertionError("interview.cmd_confirm 应成功 out={} err={}".format(out, err))
     return tid
 
 
@@ -40,42 +41,55 @@ class TestRound2Result(unittest.TestCase):
 
     def test_round2_pending(self):
         tid = _setup_confirmed_r2()
-        out, _, rc = call_main("cmd_round2_result", [
+        out, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pending",
+            "--round", "2",
         ])
         self.assertEqual(rc, 0)
         self.assertIn("ROUND2_DONE_PENDING", out)
 
     def test_round2_pass(self):
         tid = _setup_confirmed_r2()
-        out, err, rc = call_main("cmd_round2_result", [
+        out, err, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass",
+            "--round", "2",
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("OFFER_HANDOFF", out)
 
     def test_round2_reject_keep(self):
         tid = _setup_confirmed_r2()
-        out, _, rc = call_main("cmd_round2_result", [
+        out, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_keep",
+            "--round", "2",
         ])
         self.assertEqual(rc, 0)
         self.assertIn("保留人才库", out)
 
     def test_round2_reject_delete(self):
         tid = _setup_confirmed_r2()
-        out, _, rc = call_main("cmd_round2_result", [
+        out, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_delete",
+            "--round", "2",
         ])
         self.assertEqual(rc, 0)
         self.assertIn("彻底删除", out)
 
     def test_round2_wrong_stage_fails(self):
         tid = new_candidate()  # 还在 NEW
-        _, _, rc = call_main("cmd_round2_result", [
+        _, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass",
+            "--round", "2",
         ])
         self.assertNotEqual(rc, 0)
+
+    def test_round2_result_wrapper_still_forwards(self):
+        tid = _setup_confirmed_r2()
+        out, err, rc = call_main("cmd_round2_result", [
+            "--talent-id", tid, "--result", "pending",
+        ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("ROUND2_DONE_PENDING", out)
 
 
 class TestRound2SchedulingFlow(unittest.TestCase):
@@ -89,8 +103,8 @@ class TestRound2SchedulingFlow(unittest.TestCase):
         from interview import cmd_reschedule as _mod
         with mock.patch.object(_mod, "_send_reschedule_email", return_value=4321) as email_mock, \
              mock.patch.object(_mod, "spawn_calendar", return_value=8765) as cal_mock:
-            out, err, rc = call_main("cmd_round2_reschedule", [
-                "--talent-id", tid, "--time", "2026-04-02 15:00",
+            out, err, rc = call_main("interview.cmd_reschedule", [
+                "--talent-id", tid, "--round", "2", "--time", "2026-04-02 15:00", "--confirmed",
             ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("已直接确认", out)
@@ -103,8 +117,8 @@ class TestRound2SchedulingFlow(unittest.TestCase):
         from interview import cmd_reschedule as _mod
         with mock.patch.object(_mod, "_send_reschedule_email", return_value=4321) as email_mock, \
              mock.patch.object(_mod, "spawn_calendar", return_value=8765) as cal_mock:
-            out, err, rc = call_main("cmd_round2_reschedule", [
-                "--talent-id", tid, "--time", "2026-04-02 15:00", "--no-confirm",
+            out, err, rc = call_main("interview.cmd_reschedule", [
+                "--talent-id", tid, "--round", "2", "--time", "2026-04-02 15:00", "--no-confirm",
             ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("等待候选人确认", out)
@@ -128,7 +142,7 @@ class TestRound2SchedulingFlow(unittest.TestCase):
 
         with mock.patch.dict(sys.modules, {"talent_db": fake_tdb}), \
              mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468) as cal_mock:
-            out, err, rc = call_main("cmd_round2_confirm", ["--talent-id", "t_demo"])
+            out, err, rc = call_main("interview.cmd_confirm", ["--talent-id", "t_demo", "--round", "2"])
 
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("二面时间已确认", out)
@@ -154,7 +168,7 @@ class TestRound2SchedulingFlow(unittest.TestCase):
 
         with mock.patch.dict(sys.modules, {"talent_db": fake_tdb}), \
              mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468) as cal_mock:
-            out, err, rc = call_main("cmd_round2_confirm", ["--talent-id", "t_demo"])
+            out, err, rc = call_main("interview.cmd_confirm", ["--talent-id", "t_demo", "--round", "2"])
 
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("线下面试", out)
@@ -166,10 +180,26 @@ class TestRound2SchedulingFlow(unittest.TestCase):
             "测试人",
         )
 
-    def test_round2_switch_mode_is_deprecated_stub(self):
-        out, err, rc = call_main("cmd_round2_switch_mode", ["--talent-id", "t_x"])
+    def test_round2_confirm_wrapper_still_forwards(self):
+        tid = _setup_r2()
+        from interview import cmd_confirm as _confirm_mod
+        with mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468):
+            out, err, rc = call_main("cmd_round2_confirm", ["--talent-id", tid])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
-        self.assertIn("已废弃", out)
+        self.assertIn("二面时间已确认", out)
+
+    def test_round2_reschedule_wrapper_defaults_confirmed(self):
+        tid = _setup_r2()
+        from interview import cmd_reschedule as _mod
+        with mock.patch.object(_mod, "_send_reschedule_email", return_value=4321) as email_mock, \
+             mock.patch.object(_mod, "spawn_calendar", return_value=8765) as cal_mock:
+            out, err, rc = call_main("cmd_round2_reschedule", [
+                "--talent-id", tid, "--time", "2026-04-02 15:00",
+            ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("已直接确认", out)
+        email_mock.assert_called_once()
+        cal_mock.assert_called_once()
 
     def test_round2_defer_enters_wait_return_and_sends_email(self):
         tid = _setup_r2()

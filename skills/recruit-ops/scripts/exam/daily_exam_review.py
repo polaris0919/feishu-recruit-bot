@@ -23,7 +23,7 @@ import subprocess
 import time
 import email as email_lib
 from email.header import decode_header
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
 from core_state import get_tdb
@@ -33,7 +33,7 @@ _SCRIPTS = scripts_dir()
 
 
 def _rel_script_py(cmd_base):
-    """cmd_base 不含 .py，例如 cmd_round1_confirm → round1/cmd_round1_confirm.py"""
+    """返回仍以分类目录暴露的脚本相对路径。"""
     if cmd_base == "cmd_reschedule_request":
         return "common/{}.py".format(cmd_base)
     if cmd_base.startswith("cmd_round1"):
@@ -133,8 +133,78 @@ def _get_env(key, default=""):
     return (os.environ.get(key) or "").strip() or default
 
 
-def _llm_analyze_reply(email_body, round_label="一面"):
-    # type: (str, str) -> Dict[str, Any]
+def _parse_local_datetime(value, default_dt=None):
+    # type: (Optional[str], Optional[datetime]) -> Optional[datetime]
+    text = (value or "").strip()
+    if not text:
+        return None
+
+    try:
+        from dateutil import parser as _dtparser
+        kwargs = {}
+        if default_dt is not None:
+            kwargs["default"] = default_dt
+        parsed = _dtparser.parse(text, **kwargs)
+        if getattr(parsed, "tzinfo", None) is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _has_explicit_year(text):
+    # type: (str) -> bool
+    return bool(re.search(r"\b20\d{2}\b|20\d{2}[年/-]", text or ""))
+
+
+def _normalize_new_time(new_time, email_body, current_time):
+    # type: (Optional[str], str, str) -> Optional[str]
+    raw = (new_time or "").strip()
+    if not raw:
+        return None
+
+    current_dt = _parse_local_datetime(current_time)
+    fallback_dt = current_dt or datetime.now()
+    proposed_dt = _parse_local_datetime(raw, default_dt=fallback_dt)
+    if proposed_dt is None:
+        return raw
+
+    explicit_year = _has_explicit_year(email_body or "")
+    if not explicit_year:
+        anchor_year = fallback_dt.year
+        try:
+            proposed_dt = proposed_dt.replace(year=anchor_year)
+        except ValueError:
+            pass
+
+        if current_dt is not None and proposed_dt < (current_dt - timedelta(days=30)):
+            try:
+                proposed_dt = proposed_dt.replace(year=proposed_dt.year + 1)
+            except ValueError:
+                pass
+
+    return proposed_dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _message_cursor_key(msg, fallback_mid):
+    # type: (Any, Any) -> str
+    msg_id = (msg.get("Message-ID") or "").strip()
+    if msg_id:
+        return msg_id
+    if isinstance(fallback_mid, bytes):
+        fallback_mid = fallback_mid.decode("ascii", errors="ignore")
+    return "imap-mid:{}".format((fallback_mid or "").strip())
+
+
+def _llm_analyze_reply(email_body, round_label="一面", current_time=""):
+    # type: (str, str, str) -> Dict[str, Any]
     """
     调用 DashScope LLM 分析候选人邮件回复意图。
     返回 {"intent": "confirm|reschedule|request_online|defer_until_shanghai|unknown", "new_time": str|None, "summary": str}
@@ -161,6 +231,8 @@ def _llm_analyze_reply(email_body, round_label="一面"):
 
     prompt = (
         "你是一个招聘助手，请分析以下候选人邮件回复，判断候选人对{}邀请的意图。\n\n"
+        "当前系统记录的{}时间：{}\n"
+        "当前日期：{}\n\n"
         "邮件内容：\n{}\n\n"
         "请用JSON格式回复，包含以下字段：\n"
         "- intent: 只能是 confirm（确认参加）/ reschedule（要求改期）/ request_online（要求改为线上）/ defer_until_shanghai（暂时不在国内/上海，之后再约）/ unknown（意图不明）\n"
@@ -172,8 +244,15 @@ def _llm_analyze_reply(email_body, round_label="一面"):
         "- 候选人表示「不在国内」「人在外地」「希望线上」「视频面试」等均视为 request_online\n"
         "- 候选人表示「暂时不在国内/上海」「之后回国/回上海再约」「先不安排本次面试」等，且未要求线上，均视为 defer_until_shanghai\n"
         "- 候选人提出具体新时间，intent 必须是 reschedule\n"
+        "- 若邮件中的时间未显式写年份，优先沿用当前系统记录时间的年份；不要臆造更早的历史年份\n"
         "只返回 JSON，不要其他内容。"
-    ).format(round_label, email_body[:1500])
+    ).format(
+        round_label,
+        round_label,
+        current_time or "（未知）",
+        datetime.now().strftime("%Y-%m-%d"),
+        email_body[:1500],
+    )
 
     try:
         import urllib.request as _req
@@ -493,6 +572,34 @@ def _lookup_candidate_by_email(sender_email, tdb):
     return None
 
 
+def _email_is_before_reference(email_date_str, reference_date_str):
+    # type: (str, str) -> bool
+    """判断邮件时间是否早于参考时间。无法解析时返回 False。"""
+    if not email_date_str or not reference_date_str:
+        return False
+    try:
+        import datetime as _dt
+        from dateutil import parser as _dtparser
+
+        msg_dt = email_lib.utils.parsedate_to_datetime(email_date_str)
+        ref_dt = _dtparser.parse(reference_date_str)
+        if msg_dt is None or ref_dt is None:
+            return False
+
+        if msg_dt.tzinfo is None:
+            msg_dt = msg_dt.replace(tzinfo=_dt.timezone.utc)
+        else:
+            msg_dt = msg_dt.astimezone(_dt.timezone.utc)
+
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=_dt.timezone(_dt.timedelta(hours=8)))
+        ref_dt = ref_dt.astimezone(_dt.timezone.utc)
+
+        return msg_dt < ref_dt
+    except Exception:
+        return False
+
+
 def scan_new_replies(auto_mode=False):
     """
     扫描收件箱中未读的笔试回复邮件。
@@ -603,6 +710,8 @@ def scan_new_replies(auto_mode=False):
                     cand_stage = cand_info.get("stage", "")
                     exam_stages = {"EXAM_SENT", "EXAM_REVIEWED"}
                     if cand_stage not in exam_stages:
+                        continue
+                    if _email_is_before_reference(date_str, cand_info.get("exam_sent_at") or ""):
                         continue
 
                 # 检查是否已处理过此邮件（游标去重）
@@ -794,7 +903,8 @@ def _scan_interview_confirmations(round_num, auto_mode=False):
                     continue
 
                 msg_ids = data[0].split()
-                for mid in reversed(msg_ids[-30:]):  # 从最新往前扫，最多30封
+                fetch_limit = int(os.environ.get("INTERVIEW_CONFIRM_SCAN_LIMIT", "100"))
+                for mid in reversed(msg_ids[-fetch_limit:]):  # 从最新往前扫
                     try:
                         status2, raw = imap.fetch(mid, "(RFC822)")
                         if status2 != "OK":
@@ -826,9 +936,9 @@ def _scan_interview_confirmations(round_num, auto_mode=False):
                             except Exception:
                                 pass
 
-                        msg_id_header = (msg.get("Message-ID") or "").strip()
-                        if msg_id_header and msg_id_header == cand.get(last_eid_key):
-                            continue
+                        cursor_key = _message_cursor_key(msg, mid)
+                        if cursor_key and cursor_key == cand.get(last_eid_key):
+                            break
 
                         subject = _decode_mime_header(msg.get("Subject") or "")
                         body = _extract_body(msg)
@@ -840,7 +950,10 @@ def _scan_interview_confirmations(round_num, auto_mode=False):
                             continue
 
                         # LLM 分析意图
-                        analysis = _llm_analyze_reply(body or subject, round_label)
+                        analysis = _llm_analyze_reply(body or subject, round_label, interview_time)
+                        normalized_new_time = _normalize_new_time(
+                            analysis.get("new_time"), body or subject, interview_time
+                        )
 
                         results.append({
                             "talent_id": talent_id,
@@ -848,17 +961,17 @@ def _scan_interview_confirmations(round_num, auto_mode=False):
                             "candidate_name": cand.get("candidate_name"),
                             "interview_time": interview_time,
                             "intent": analysis["intent"],
-                            "new_time": analysis["new_time"],
+                            "new_time": normalized_new_time,
                             "summary": analysis["summary"],
                             "subject": subject,
-                            "message_id": msg_id_header,
+                            "message_id": (msg.get("Message-ID") or "").strip() or cursor_key,
                             "round": round_num,
                         })
 
                         # 更新游标
-                        if msg_id_header:
+                        if cursor_key:
                             try:
-                                _tdb.update_last_email_id(talent_id, "round{}".format(round_num), msg_id_header)
+                                _tdb.update_last_email_id(talent_id, "round{}".format(round_num), cursor_key)
                             except Exception:
                                 pass
 
@@ -888,7 +1001,7 @@ def format_interview_confirmation_report(item):
     summary = item.get("summary", "")
 
     if intent == "timeout":
-        confirm_cmd = "cmd_round1_confirm" if round_num == 1 else "cmd_round2_confirm"
+        confirm_rel = "interview/cmd_confirm.py"
         return (
             "[{round_label}确认扫描]\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -896,12 +1009,12 @@ def format_interview_confirmation_report(item):
             "talent_id：{tid}（执行命令时必须用此ID）\n"
             "{round_label}时间：{t}\n"
             "{summary}，建议执行：\n"
-            "  python3 {rel} --talent-id {tid} --auto"
+            "  python3 {rel} --talent-id {tid} --round {round_num} --auto"
         ).format(round_label=round_label, name=name, tid=talent_id, t=interview_time,
-                 summary=item.get("summary", "超时未回复"), rel=_rel_script_py(confirm_cmd))
+                 summary=item.get("summary", "超时未回复"), rel=confirm_rel, round_num=round_num)
 
     elif intent == "confirm":
-        confirm_cmd = "cmd_round1_confirm" if round_num == 1 else "cmd_round2_confirm"
+        confirm_rel = "interview/cmd_confirm.py"
         return (
             "[{round_label}确认扫描]\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -910,12 +1023,12 @@ def format_interview_confirmation_report(item):
             "{round_label}时间：{t}\n"
             "意图：{summary}\n"
             "建议执行确认：\n"
-            "  python3 {rel} --talent-id {tid}"
+            "  python3 {rel} --talent-id {tid} --round {round_num}"
         ).format(round_label=round_label, name=name, tid=talent_id, t=interview_time,
-                 summary=summary, rel=_rel_script_py(confirm_cmd))
+                 summary=summary, rel=confirm_rel, round_num=round_num)
 
     elif intent == "reschedule":
-        reschedule_cmd = "cmd_round1_reschedule" if round_num == 1 else "cmd_round2_reschedule"
+        reschedule_rel = "interview/cmd_reschedule.py"
         new_time = item.get("new_time")
         time_hint = ""
         reschedule_hint = ""
@@ -923,13 +1036,13 @@ def format_interview_confirmation_report(item):
             time_hint = "\n候选人建议时间：{}".format(new_time)
             reschedule_hint = (
                 "\n⚠️ 必须使用以下命令（talent_id={tid}，勿混淆其他候选人）：\n"
-                "  python3 {rel} --talent-id {tid} --time \"{t}\""
-            ).format(rel=_rel_script_py(reschedule_cmd), tid=talent_id, t=new_time)
+                "  python3 {rel} --talent-id {tid} --round {round_num} --time \"{t}\""
+            ).format(rel=reschedule_rel, tid=talent_id, round_num=round_num, t=new_time)
         else:
             reschedule_hint = (
                 "\n⚠️ 候选人未给出具体时间，请联系后执行（talent_id={tid}）：\n"
-                "  python3 {rel} --talent-id {tid} --time \"YYYY-MM-DD HH:MM\""
-            ).format(rel=_rel_script_py(reschedule_cmd), tid=talent_id)
+                "  python3 {rel} --talent-id {tid} --round {round_num} --time \"YYYY-MM-DD HH:MM\""
+            ).format(rel=reschedule_rel, tid=talent_id, round_num=round_num)
         return (
             "[{round_label}确认扫描]\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -955,7 +1068,7 @@ def format_interview_confirmation_report(item):
         switch_hint = (
             "\n候选人希望线上面试：请直接邮件沟通会议方式；改时间可用：\n"
             "  python3 {rel} --talent-id {tid} --round 2 --time \"YYYY-MM-DD HH:MM\""
-        ).format(tid=talent_id, rel=_rel_script_py("cmd_round2_reschedule"))
+        ).format(tid=talent_id, rel="interview/cmd_reschedule.py")
         return (
             "[{round_label}确认扫描]\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1077,7 +1190,8 @@ def _scan_reschedule_requests(round_num, auto_mode=False):
                     continue
 
                 msg_ids = data[0].split()
-                for mid in reversed(msg_ids[-30:]):
+                fetch_limit = int(os.environ.get("INTERVIEW_CONFIRM_SCAN_LIMIT", "100"))
+                for mid in reversed(msg_ids[-fetch_limit:]):
                     try:
                         status2, raw = imap.fetch(mid, "(RFC822)")
                         if status2 != "OK":
@@ -1105,9 +1219,9 @@ def _scan_reschedule_requests(round_num, auto_mode=False):
                             except Exception:
                                 pass
 
-                        msg_id_header = (msg.get("Message-ID") or "").strip()
-                        if msg_id_header and msg_id_header == cand.get(last_eid_key):
-                            continue
+                        cursor_key = _message_cursor_key(msg, mid)
+                        if cursor_key and cursor_key == cand.get(last_eid_key):
+                            break
 
                         subject = _decode_mime_header(msg.get("Subject") or "")
                         body = _extract_body(msg)
@@ -1117,15 +1231,42 @@ def _scan_reschedule_requests(round_num, auto_mode=False):
                         if any(k in subject.lower() for k in skip_kws):
                             continue
 
-                        analysis = _llm_analyze_reply(body or subject, round_label)
+                        analysis = _llm_analyze_reply(body or subject, round_label, interview_time)
+                        normalized_new_time = _normalize_new_time(
+                            analysis.get("new_time"), body or subject, interview_time
+                        )
                         detected_intent = analysis.get("intent", "unknown")
 
-                        actionable_intents = {"reschedule", "defer_until_shanghai", "request_online"}
+                        if detected_intent == "reschedule":
+                            same_time = (
+                                bool(normalized_new_time)
+                                and bool(interview_time)
+                                and normalized_new_time == interview_time
+                            )
+                            if not normalized_new_time or same_time:
+                                detected_intent = "reschedule_noop"
+                                if same_time:
+                                    analysis["summary"] = (
+                                        (analysis.get("summary") or "候选人邮件已记录")
+                                        + "（未识别到与当前安排不同的新时间）"
+                                    )
+                                else:
+                                    analysis["summary"] = (
+                                        (analysis.get("summary") or "候选人邮件已记录")
+                                        + "（未提取到明确的新时间）"
+                                    )
+
+                        actionable_intents = {
+                            "reschedule",
+                            "defer_until_shanghai",
+                            "request_online",
+                            "reschedule_noop",
+                        }
                         if detected_intent not in actionable_intents:
                             # 非改期意图：更新游标避免下次重复扫描
-                            if msg_id_header:
+                            if cursor_key:
                                 try:
-                                    _tdb.update_last_email_id(talent_id, "round{}".format(round_num), msg_id_header)
+                                    _tdb.update_last_email_id(talent_id, "round{}".format(round_num), cursor_key)
                                 except Exception:
                                     pass
                             continue
@@ -1136,16 +1277,16 @@ def _scan_reschedule_requests(round_num, auto_mode=False):
                             "candidate_name": cand.get("candidate_name"),
                             "interview_time": interview_time,
                             "intent": detected_intent,
-                            "new_time": analysis["new_time"],
+                            "new_time": normalized_new_time,
                             "summary": analysis["summary"],
                             "subject": subject,
-                            "message_id": msg_id_header,
+                            "message_id": (msg.get("Message-ID") or "").strip() or cursor_key,
                             "round": round_num,
                         })
 
-                        if msg_id_header:
+                        if cursor_key:
                             try:
-                                _tdb.update_last_email_id(talent_id, "round{}".format(round_num), msg_id_header)
+                                _tdb.update_last_email_id(talent_id, "round{}".format(round_num), cursor_key)
                             except Exception:
                                 pass
 
@@ -1209,13 +1350,11 @@ def format_reschedule_request_report(item):
                  t=interview_time, summary=summary, cmd_hint=cmd_hint)
 
     if intent == "request_online":
-        reschedule_rel = _rel_script_py(
-            "cmd_round2_reschedule" if round_num == 2 else "cmd_round1_reschedule"
-        )
+        reschedule_rel = "interview/cmd_reschedule.py"
         cmd_hint = (
             "\n候选人希望改为线上面试：请邮件沟通会议细节；改时间可用：\n"
-            "  python3 {rel} --talent-id {tid} --time \"YYYY-MM-DD HH:MM\""
-        ).format(rel=reschedule_rel, tid=talent_id)
+            "  python3 {rel} --talent-id {tid} --round {round_num} --time \"YYYY-MM-DD HH:MM\""
+        ).format(rel=reschedule_rel, tid=talent_id, round_num=round_num)
         return (
             "[{round_label}线上面试请求]\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1226,20 +1365,37 @@ def format_reschedule_request_report(item):
         ).format(round_label=round_label, name=name, tid=talent_id,
                  t=interview_time, summary=summary, cmd_hint=cmd_hint)
 
-    reschedule_cmd = "cmd_round1_reschedule" if round_num == 1 else "cmd_round2_reschedule"
+    if intent == "reschedule_noop":
+        return (
+            "[{round_label}改期邮件已记录]\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "候选人：{name}\n"
+            "talent_id：{tid}（执行命令时必须用此ID）\n"
+            "原{round_label}时间：{t}\n"
+            "说明：{summary}\n"
+            "系统未自动撤销确认：未识别到与当前安排不同的新时间。"
+        ).format(
+            round_label=round_label,
+            name=name,
+            tid=talent_id,
+            t=interview_time,
+            summary=summary or "候选人邮件已记录",
+        )
+
+    reschedule_rel = "interview/cmd_reschedule.py"
     time_hint = ""
     cmd_hint = ""
     if new_time:
         time_hint = "\n候选人建议新时间：{}".format(new_time)
         cmd_hint = (
             "\n请确认后执行（talent_id={tid}，勿混淆其他候选人）：\n"
-            "  python3 {rel} --talent-id {tid} --time \"{t}\""
-        ).format(rel=_rel_script_py(reschedule_cmd), tid=talent_id, t=new_time)
+            "  python3 {rel} --talent-id {tid} --round {round_num} --time \"{t}\""
+        ).format(rel=reschedule_rel, tid=talent_id, round_num=round_num, t=new_time)
     else:
         cmd_hint = (
             "\n候选人未给出具体新时间，请联系后执行（talent_id={tid}）：\n"
-            "  python3 {rel} --talent-id {tid} --time \"YYYY-MM-DD HH:MM\""
-        ).format(rel=_rel_script_py(reschedule_cmd), tid=talent_id)
+            "  python3 {rel} --talent-id {tid} --round {round_num} --time \"YYYY-MM-DD HH:MM\""
+        ).format(rel=reschedule_rel, tid=talent_id, round_num=round_num)
 
     return (
         "[{round_label}改期请求]\n"
@@ -1251,7 +1407,7 @@ def format_reschedule_request_report(item):
     ).format(
         round_label=round_label, name=name, tid=talent_id,
         t=interview_time, summary=summary,
-        time_hint=time_hint, cmd_hint=cmd_hint,
+        time_hint=time_hint, cmd_hint=cmd_hint, round_num=round_num,
     )
 
 
@@ -1294,6 +1450,8 @@ def _run_reschedule_scan(args, fn):
                     report = format_reschedule_request_report(item)
                     report += "\n\u26a0 自动暂缓失败: {}".format(e)
             elif intent == "request_online":
+                report = format_reschedule_request_report(item)
+            elif intent == "reschedule_noop":
                 report = format_reschedule_request_report(item)
             else:
                 cmd = [
@@ -1392,24 +1550,43 @@ def main(argv=None):
                 summary = item.get("summary", "")
 
                 if intent == "confirm":
-                    # 候选人同意当前时间 -> 记录 pending，推送老板确认
+                    # 候选人同意时间；若 LLM 同时给出新时间，则以新时间为准，避免确认文案与 DB 不一致。
+                    proposed_time = new_time or interview_time
                     if _tdb:
                         _tdb.set_boss_confirm_pending(
                             talent_id, round_num,
-                            proposed_time=interview_time,
+                            proposed_time=proposed_time,
                         )
-                    report = (
-                        "[{rl}候选人回信]\n"
-                        "━━━━━━━━━━━━━━━━━━━━\n"
-                        "候选人：{name}\n"
-                        "talent_id：{tid}\n"
-                        "{rl}时间：{t}\n"
-                        "候选人意图：{summary}\n"
-                        "━━━━━━━━━━━━━━━━━━━━\n"
-                        "⏳ 候选人已同意该时间，请确认是否最终敲定：\n"
-                        "  回复「确认 {tid} {rl}」即可最终确认并创建日历"
-                    ).format(rl=round_label, name=name, tid=talent_id,
-                             t=interview_time, summary=summary)
+                    if new_time and new_time != interview_time:
+                        report = (
+                            "[{rl}候选人回信]\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                            "候选人：{name}\n"
+                            "talent_id：{tid}\n"
+                            "原{rl}时间：{t}\n"
+                            "候选人确认时间：{nt}\n"
+                            "候选人意图：{summary}\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                            "⏳ 候选人已确认新时间，请确认是否最终敲定：\n"
+                            "  回复「确认 {tid} {rl}」→ 按新时间 {nt} 最终确认\n"
+                            "  回复「改期 {tid} YYYY-MM-DD HH:MM」→ 改为其他时间"
+                        ).format(
+                            rl=round_label, name=name, tid=talent_id,
+                            t=interview_time, nt=new_time, summary=summary,
+                        )
+                    else:
+                        report = (
+                            "[{rl}候选人回信]\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                            "候选人：{name}\n"
+                            "talent_id：{tid}\n"
+                            "{rl}时间：{t}\n"
+                            "候选人意图：{summary}\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                            "⏳ 候选人已同意该时间，请确认是否最终敲定：\n"
+                            "  回复「确认 {tid} {rl}」即可最终确认并创建日历"
+                        ).format(rl=round_label, name=name, tid=talent_id,
+                                 t=interview_time, summary=summary)
 
                 elif intent == "reschedule" and new_time:
                     # 候选人提出新时间 -> 记录 pending，推送老板确认

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""一面相关测试：cmd_round1_result / cmd_round1_schedule / cmd_round1_defer。"""
+"""一面相关测试：统一结果命令 + round1 调度 / defer / 兼容别名。"""
 import unittest
 from unittest import mock
 
@@ -25,8 +25,9 @@ class TestRound1Result(unittest.TestCase):
 
     def test_round1_pass_creates_exam(self):
         tid = new_candidate()
-        out, err, rc = call_main("cmd_round1_result", [
+        out, err, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+            "--round", "1",
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("一面通过", out)
@@ -34,8 +35,9 @@ class TestRound1Result(unittest.TestCase):
 
     def test_round1_reject_keep(self):
         tid = new_candidate()
-        out, _, rc = call_main("cmd_round1_result", [
+        out, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_keep",
+            "--round", "1",
         ])
         self.assertEqual(rc, 0)
         self.assertIn("保留人才库", out)
@@ -44,29 +46,41 @@ class TestRound1Result(unittest.TestCase):
 
     def test_round1_reject_delete(self):
         tid = new_candidate()
-        out, _, rc = call_main("cmd_round1_result", [
+        out, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_delete",
+            "--round", "1",
         ])
         self.assertEqual(rc, 0)
         self.assertIn("彻底删除", out)
 
     def test_round1_pass_without_email_fails(self):
         tid = new_candidate()
-        _, _, rc = call_main("cmd_round1_result", [
+        _, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass",
+            "--round", "1",
         ])
         self.assertNotEqual(rc, 0)
 
     def test_round1_wrong_stage_fails(self):
         tid = new_candidate()
-        call_main("cmd_round1_result", [
+        call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_keep",
+            "--round", "1",
         ])
         # 已是 REJECT 状态，再执行 pass 应失败
-        _, _, rc = call_main("cmd_round1_result", [
+        _, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+            "--round", "1",
         ])
         self.assertNotEqual(rc, 0)
+
+    def test_round1_result_wrapper_still_forwards(self):
+        tid = new_candidate()
+        out, err, rc = call_main("cmd_round1_result", [
+            "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+        ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("一面通过", out)
 
 
 class TestRound1SchedulingFlow(unittest.TestCase):
@@ -94,6 +108,22 @@ class TestRound1SchedulingFlow(unittest.TestCase):
         cand = load_candidate(tid)
         self.assertEqual(cand["stage"], "WAIT_RETURN")
         self.assertEqual(cand["wait_return_round"], 1)
+
+    def test_round1_confirm_wrapper_still_forwards(self):
+        tid = new_candidate("一面确认人", "r1confirm@example.com")
+        out, err, rc = call_main("cmd_round1_schedule", [
+            "--talent-id", tid, "--time", "2026-04-10 10:00",
+        ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+
+        from interview import cmd_confirm as _confirm_mod
+        with mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468):
+            out, err, rc = call_main("cmd_round1_confirm", ["--talent-id", tid])
+
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("一面时间已确认", out)
+        cand = load_candidate(tid)
+        self.assertEqual(cand["stage"], "ROUND1_SCHEDULED")
 
 
 if __name__ == "__main__":

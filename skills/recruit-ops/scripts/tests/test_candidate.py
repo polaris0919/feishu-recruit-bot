@@ -132,8 +132,9 @@ class TestStatus(CandidateFlowTestCase):
 
     def test_status_shows_round2_after_exam_pass(self):
         tid = new_candidate("刘洋", "ly@x.com")
-        self.assert_cli_ok("cmd_round1_result", [
+        self.assert_cli_ok("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", "ly@x.com",
+            "--round", "1",
         ])
         self.assert_cli_ok("cmd_exam_result", [
             "--talent-id", tid, "--result", "pass",
@@ -221,8 +222,9 @@ class TestSearch(CandidateFlowTestCase):
     def test_search_all_active_excludes_rejected_candidates(self):
         active_tid = new_candidate("进行中", "active@x.com")
         rejected_tid = new_candidate("已淘汰", "reject@x.com")
-        self.assert_cli_ok("cmd_round1_result", [
+        self.assert_cli_ok("interview.cmd_result", [
             "--talent-id", rejected_tid, "--result", "reject_keep",
+            "--round", "1",
         ])
 
         out, _ = self.assert_cli_ok("cmd_search", ["--all-active"])
@@ -239,7 +241,7 @@ class TestSearch(CandidateFlowTestCase):
 
         import interview.cmd_confirm as cmd_confirm
         with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=2468):
-            self.assert_cli_ok("cmd_round1_confirm", ["--talent-id", tid])
+            self.assert_cli_ok("interview.cmd_confirm", ["--talent-id", tid, "--round", "1"])
 
         out, _ = self.assert_cli_ok("cmd_search", ["--query", "王浩铖"])
         data = json.loads(out)

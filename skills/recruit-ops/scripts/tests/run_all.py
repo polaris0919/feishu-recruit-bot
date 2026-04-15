@@ -2,20 +2,27 @@
 """
 招聘系统全量测试套件 — 聚合入口。
 运行方式：
-    python3 test_all.py              # 全部测试
+    cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
+    python3 tests/run_all.py         # 全部测试
     python3 -m pytest tests/         # 同等效果
 
 各模块测试文件：
     tests/test_candidate.py  — 候选人基础操作（新建 / 状态 / 搜索 / 删除）
     tests/test_intake.py     — CV 导入（cmd_ingest_cv）
-    tests/test_round1.py     — 一面结果（cmd_round1_result）
+    tests/test_round1.py     — 一面结果（interview.cmd_result --round 1）
     tests/test_exam.py       — 笔试（cmd_exam_result / exam_prereview / daily_exam_review）
-    tests/test_round2.py     — 二面（cmd_round2_result / 调度流程）
+    tests/test_round2.py     — 二面（interview.cmd_* / 调度流程）
     tests/test_common.py     — 公共跨阶段操作（改期请求 / 改期扫描）
     tests/test_infra.py      — 基础设施（core_state / talent_db / feishu）
 """
+import os
 import sys
 import unittest
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_SCRIPTS_DIR = os.path.dirname(_TESTS_DIR)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 from tests.test_candidate import TestNewCandidate, TestStatus, TestSearch, TestRemove
 from tests.test_intake import TestIngestCv
