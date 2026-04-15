@@ -357,7 +357,7 @@ class TestDailyExamReview(unittest.TestCase):
             "summary": "候选人暂时不在上海，之后再约",
         })
         self.assertIn("之后再约", report)
-        self.assertIn("cmd_round2_defer.py", report)
+        self.assertIn("interview/cmd_defer.py", report)
         self.assertIn("WAIT_RETURN", report)
 
     def test_main_auto_defers_round2_candidate(self):
@@ -383,7 +383,7 @@ class TestDailyExamReview(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         called = run_mock.call_args[0][0]
-        self.assertIn("cmd_round2_defer.py", called[1])
+        self.assertIn("interview/cmd_defer.py", called[1])
         self.assertIn("--talent-id", called)
         self.assertIn("t_demo", called)
 

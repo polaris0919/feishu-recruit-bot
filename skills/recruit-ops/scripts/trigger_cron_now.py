@@ -2,13 +2,12 @@
 """
 让 recruit cron 任务在指定秒数后立即触发（不重启 gateway）。
 用法:
-  python3 trigger_cron_now.py           # 默认 10 秒后触发
-  python3 trigger_cron_now.py 30        # 30 秒后触发
+  uv run python3 scripts/trigger_cron_now.py      # 默认 10 秒后触发
+  uv run python3 scripts/trigger_cron_now.py 30   # 30 秒后触发
 """
 import json, os, sys, time
 
 _SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_SCRIPTS, "lib"))
 
 delay_sec = int(sys.argv[1]) if len(sys.argv) > 1 else 10
 jobs_path = os.environ.get("RECRUIT_CRON_JOBS_PATH",

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """
 安排一面时间：
   1. 发一面邀请邮件给候选人（确认时间）
@@ -23,13 +18,13 @@ if _LIB not in sys.path:
 import argparse
 import os
 import sys
+from datetime import datetime
 from typing import List, Optional
 
 from bg_helpers import send_bg_email
 from core_state import (
     append_audit,
     ensure_stage_transition,
-    get_tdb,
     load_candidate,
     save_candidate,
 )
@@ -105,6 +100,9 @@ def main(argv=None):
 
     cand["round1_time"] = round1_time
     cand["round1_confirm_status"] = "PENDING"
+    cand["round1_invite_sent_at"] = datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    cand["round1_calendar_event_id"] = None
+    cand["wait_return_round"] = None
 
     candidate_email = cand.get("candidate_email", "")
     candidate_name = cand.get("candidate_name", "")
@@ -121,10 +119,9 @@ def main(argv=None):
     )
 
     save_candidate(talent_id, cand)
-
-    _tdb = get_tdb()
-    if _tdb:
-        _tdb.save_invite_info(talent_id, 1)
+    import talent_db as _tdb
+    if _tdb._is_enabled():
+        _tdb.clear_round_followup_fields(talent_id, 1)
 
     lines = [
         "[一面已安排]",

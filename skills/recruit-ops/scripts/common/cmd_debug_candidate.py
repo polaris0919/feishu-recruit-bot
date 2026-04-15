@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
 
-import os
-import sys
-
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """
 直接从 PostgreSQL 打印候选人的完整 DB 视图，便于本地真库联调。
 

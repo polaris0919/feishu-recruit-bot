@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """兼容入口：转发到 `interview/cmd_result.py --round 2`。"""
-import os, sys
-_SCRIPTS = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-if _SCRIPTS not in sys.path:
-    sys.path.append(_SCRIPTS)
+import sys
 from interview.cmd_result import main as _main
 
 def main(argv=None):

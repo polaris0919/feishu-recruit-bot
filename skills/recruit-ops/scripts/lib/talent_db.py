@@ -6,6 +6,8 @@
 - schema 初始化：psql "$DATABASE_URL" -f lib/migrations/schema.sql
 """
 import sys
+import json
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -70,6 +72,13 @@ _TALENT_FIELDS = [
     "created_at", "updated_at",
 ]
 
+# 这些字段由定向 UPDATE / 后台流程维护，而不是通过 save_candidate() 全量覆盖。
+# 保持它们不进入 upsert，可避免旧 cand 快照把其他流程刚写入的提醒时间戳覆盖掉。
+_DB_MANAGED_ROUND_FIELDS = (
+    "reminded_at",
+    "confirm_prompted_at",
+)
+
 # TIMESTAMPTZ 字段：以 ISO 格式字符串返回
 _TIMESTAMPTZ_ISO_KEYS = frozenset({
     "updated_at", "created_at", "exam_sent_at",
@@ -113,11 +122,42 @@ def _row_to_event(row):
     at_str = at_val.isoformat().replace("+00:00", "Z") if hasattr(at_val, "isoformat") else str(at_val)
     payload = row["payload"] if isinstance(row["payload"], dict) else {}
     return {
+        "event_id": _s(row.get("event_id")),
         "at": at_str,
         "actor": _s(row.get("actor"), "system"),
         "action": _s(row.get("action"), ""),
         "payload": payload,
     }
+
+
+def _legacy_event_id(tid, entry):
+    # type: (str, Dict[str, Any]) -> str
+    payload = entry.get("payload") or {}
+    payload_json = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    seed = "|".join([
+        _s(tid, ""),
+        _s(entry.get("at"), ""),
+        _s(entry.get("actor"), "system"),
+        _s(entry.get("action"), ""),
+        payload_json,
+    ])
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "recruit-ops:talent-event:" + seed))
+
+
+def _event_values(tid, entry):
+    # type: (str, Dict[str, Any]) -> tuple[str, str, str, str, Dict[str, Any]]
+    at_str = _s(entry.get("at")) or datetime.now().isoformat()
+    actor = _s(entry.get("actor"), "system")
+    action = _s(entry.get("action"), "")
+    payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+    event_id = _s(entry.get("event_id")) or _legacy_event_id(tid, {
+        "at": at_str,
+        "actor": actor,
+        "action": action,
+        "payload": payload,
+    })
+    entry["event_id"] = event_id
+    return event_id, at_str, actor, action, payload
 
 
 def _row_to_candidate(row):
@@ -166,7 +206,7 @@ def load_state_from_db():
                     candidates[tid] = _row_to_candidate(row)
 
                 cur.execute(
-                    "SELECT talent_id, at, actor, action, payload "
+                    "SELECT talent_id, event_id, at, actor, action, payload "
                     "FROM talent_events ORDER BY at ASC"
                 )
                 for row in cur.fetchall():
@@ -268,18 +308,50 @@ def _upsert_talent(cur, tid, cand):
     })
 
 
+def _round_confirmation_candidates(round_num, confirmed):
+    # type: (int, bool) -> List[Dict[str, Any]]
+    prefix = "round{}".format(round_num)
+    stage = (
+        "ROUND1_SCHEDULED" if round_num == 1 else "ROUND2_SCHEDULED"
+    ) if confirmed else (
+        "ROUND1_SCHEDULING" if round_num == 1 else "ROUND2_SCHEDULING"
+    )
+    status = "CONFIRMED" if confirmed else "PENDING"
+    last_eid_col = "{}_last_email_id".format(prefix)
+    rows = _query_all("""
+        SELECT talent_id, candidate_email, candidate_name,
+               {p}_time, {p}_invite_sent_at, {p}_confirm_status, {p}_calendar_event_id,
+               {p}_last_email_id
+        FROM talents
+        WHERE current_stage = %s
+          AND {p}_confirm_status = %s
+          AND candidate_email IS NOT NULL
+    """.format(p=prefix), (stage, status))
+    results = []
+    for r in rows:
+        results.append({
+            "talent_id": _s(r["talent_id"], ""),
+            "candidate_email": _s(r["candidate_email"], ""),
+            "candidate_name": _s(r.get("candidate_name")),
+            "{}_time".format(prefix): _dt_to_local_str(r.get("{}_time".format(prefix))),
+            "{}_invite_sent_at".format(prefix): r.get("{}_invite_sent_at".format(prefix)),
+            "{}_confirm_status".format(prefix): _s(r.get("{}_confirm_status".format(prefix)), "UNSET"),
+            "{}_calendar_event_id".format(prefix): _s(r.get("{}_calendar_event_id".format(prefix))),
+            last_eid_col: _s(r.get(last_eid_col)),
+        })
+    return results
+
+
 def _insert_events(cur, tid, audit):
     # type: (Any, str, list) -> None
     for entry in (audit or []):
-        at_str = entry.get("at") or datetime.now().isoformat()
-        actor = entry.get("actor", "system")
-        action = entry.get("action", "")
-        payload = entry.get("payload") or {}
+        event_id, at_str, actor, action, payload = _event_values(tid, entry)
         try:
             cur.execute(
-                "INSERT INTO talent_events (talent_id, at, actor, action, payload) "
-                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (tid, at_str, actor, action, Json(payload)),
+                "INSERT INTO talent_events (event_id, talent_id, at, actor, action, payload) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (event_id) DO NOTHING",
+                (event_id, tid, at_str, actor, action, Json(payload)),
             )
         except Exception as e:
             print("[talent_db] 插入事件失败: {}".format(e), file=sys.stderr)
@@ -323,7 +395,7 @@ def get_one(talent_id):
                     return None
                 cand = _row_to_candidate(row)
                 cur.execute(
-                    "SELECT at, actor, action, payload FROM talent_events "
+                    "SELECT event_id, at, actor, action, payload FROM talent_events "
                     "WHERE talent_id = %s ORDER BY at ASC",
                     (talent_id,),
                 )
@@ -495,12 +567,21 @@ def get_pending_interview_reminders():
 def save_exam_prereview(talent_id, exam_score, exam_notes):
     # type: (str, int, str) -> None
     """笔试预审结果写入 talent_events，不再占用 talents 表列。"""
-    _update(
-        "INSERT INTO talent_events (talent_id, at, actor, action, payload) "
-        "VALUES (%s, NOW(), %s, %s, %s)",
-        (talent_id, "system", "exam_prereview",
-         Json({"score": exam_score, "summary": exam_notes})),
-    )
+    if not _is_enabled():
+        return
+    entry = {
+        "event_id": str(uuid.uuid4()),
+        "at": datetime.now().isoformat(),
+        "actor": "system",
+        "action": "exam_prereview",
+        "payload": {"score": exam_score, "summary": exam_notes},
+    }
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                _insert_events(cur, talent_id, [entry])
+    except Exception as e:
+        print("[talent_db] save_exam_prereview 失败: {}".format(e), file=sys.stderr)
 
 
 # ─── Round 通用操作（round_num 参数化，消除 round1/round2 重复）─────────────────
@@ -551,6 +632,16 @@ def clear_calendar_event_id(talent_id, round_num):
             (talent_id,))
 
 
+def clear_round_followup_fields(talent_id, round_num):
+    # type: (str, int) -> None
+    prefix = "round{}".format(round_num)
+    _update(
+        "UPDATE talents SET {p}_confirm_prompted_at = NULL, {p}_reminded_at = NULL "
+        "WHERE talent_id = %s".format(p=prefix),
+        (talent_id,),
+    )
+
+
 def reset_round_scheduling_tracking(talent_id, round_num):
     prefix = "round{}".format(round_num)
     _update(
@@ -571,60 +662,12 @@ def reset_round2_scheduling_tracking(talent_id):
 
 def get_pending_confirmations(round_num):
     # type: (int) -> List[Dict[str, Any]]
-    prefix = "round{}".format(round_num)
-    stage = "ROUND1_SCHEDULING" if round_num == 1 else "ROUND2_SCHEDULING"
-    last_eid_col = "{}_last_email_id".format(prefix)
-    rows = _query_all("""
-        SELECT talent_id, candidate_email, candidate_name,
-               {p}_time, {p}_invite_sent_at, {p}_confirm_status, {p}_calendar_event_id,
-               {p}_last_email_id
-        FROM talents
-        WHERE current_stage = %s
-          AND {p}_confirm_status = 'PENDING'
-          AND candidate_email IS NOT NULL
-    """.format(p=prefix), (stage,))
-    results = []
-    for r in rows:
-        results.append({
-            "talent_id": _s(r["talent_id"], ""),
-            "candidate_email": _s(r["candidate_email"], ""),
-            "candidate_name": _s(r.get("candidate_name")),
-            "{}_time".format(prefix): _dt_to_local_str(r.get("{}_time".format(prefix))),
-            "{}_invite_sent_at".format(prefix): r.get("{}_invite_sent_at".format(prefix)),
-            "{}_confirm_status".format(prefix): _s(r.get("{}_confirm_status".format(prefix)), "UNSET"),
-            "{}_calendar_event_id".format(prefix): _s(r.get("{}_calendar_event_id".format(prefix))),
-            last_eid_col: _s(r.get(last_eid_col)),
-        })
-    return results
+    return _round_confirmation_candidates(round_num, confirmed=False)
 
 
 def get_confirmed_candidates(round_num):
     # type: (int) -> List[Dict[str, Any]]
-    prefix = "round{}".format(round_num)
-    stage = "ROUND1_SCHEDULED" if round_num == 1 else "ROUND2_SCHEDULED"
-    last_eid_col = "{}_last_email_id".format(prefix)
-    rows = _query_all("""
-        SELECT talent_id, candidate_email, candidate_name,
-               {p}_time, {p}_invite_sent_at, {p}_confirm_status, {p}_calendar_event_id,
-               {p}_last_email_id
-        FROM talents
-        WHERE current_stage = %s
-          AND {p}_confirm_status = 'CONFIRMED'
-          AND candidate_email IS NOT NULL
-    """.format(p=prefix), (stage,))
-    results = []
-    for r in rows:
-        results.append({
-            "talent_id": _s(r["talent_id"], ""),
-            "candidate_email": _s(r["candidate_email"], ""),
-            "candidate_name": _s(r.get("candidate_name")),
-            "{}_time".format(prefix): _dt_to_local_str(r.get("{}_time".format(prefix))),
-            "{}_invite_sent_at".format(prefix): r.get("{}_invite_sent_at".format(prefix)),
-            "{}_confirm_status".format(prefix): "CONFIRMED",
-            "{}_calendar_event_id".format(prefix): _s(r.get("{}_calendar_event_id".format(prefix))),
-            last_eid_col: _s(r.get(last_eid_col)),
-        })
-    return results
+    return _round_confirmation_candidates(round_num, confirmed=True)
 
 
 # ─── 改期 ─────────────────────────────────────────────────────────────────────

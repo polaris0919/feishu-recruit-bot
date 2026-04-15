@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """
 面试完成后自动催问面试评价与决定（cron 触发）。
 v2: 使用 feishu_client 替代 feishu_notify，talent_db 直接导入。

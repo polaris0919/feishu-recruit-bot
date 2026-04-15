@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """
 处理已确认面试候选人的改期请求（一面/二面通用）：
   1. 撤销确认状态（confirm_status → PENDING）

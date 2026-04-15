@@ -14,10 +14,6 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, "..", "lib"))
-for _p in (_LIB, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 _SAFE_FIELDS = {
     "candidate_name", "candidate_email", "phone", "wechat",

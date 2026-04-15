@@ -10,10 +10,6 @@ from __future__ import print_function
 import os
 import sys
 
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 import re
 import sys
 from datetime import datetime, timedelta

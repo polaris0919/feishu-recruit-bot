@@ -6,6 +6,7 @@
 import os
 import subprocess
 import time
+from typing import Iterable, Optional
 
 from recruit_paths import workspace_path
 from side_effect_guard import fake_pid, side_effects_disabled
@@ -17,12 +18,15 @@ EMAIL_SEND_SCRIPT = str(
 )
 
 
-def send_bg_email(to, subject, body, tag="email"):
-    # type: (str, str, str, str) -> int
+def send_bg_email(to, subject, body, tag="email", attachments=None):
+    # type: (str, str, str, str, Optional[Iterable[str]]) -> int
     """后台发送邮件，返回 PID。tag 用于区分日志文件名。"""
     if side_effects_disabled():
         return fake_pid()
     cmd = ["python3", EMAIL_SEND_SCRIPT, "--to", to, "--subject", subject, "--body", body]
+    for attachment in (attachments or []):
+        if attachment:
+            cmd += ["--attachment", attachment]
     log_path = "/tmp/email_{}_{}_{}.log".format(tag, to.replace("@", "_"), int(time.time()))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(

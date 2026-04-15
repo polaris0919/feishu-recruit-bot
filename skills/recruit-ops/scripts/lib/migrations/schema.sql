@@ -51,8 +51,6 @@ CREATE TABLE IF NOT EXISTS talents (
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE talents ADD COLUMN IF NOT EXISTS wait_return_round INTEGER;
-
 -- ─── CHECK 约束：current_stage 合法值 ─────────────────────────────────────────
 DO $$
 BEGIN
@@ -101,6 +99,7 @@ END $$;
 -- ─── 审计事件表 ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS talent_events (
     id        SERIAL PRIMARY KEY,
+    event_id  TEXT,
     talent_id TEXT NOT NULL,
     at        TIMESTAMPTZ DEFAULT NOW(),
     actor     TEXT,
@@ -112,7 +111,6 @@ CREATE TABLE IF NOT EXISTS talent_events (
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS exam_last_email_id   TEXT;
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS round1_last_email_id TEXT;
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS round2_last_email_id TEXT;
-ALTER TABLE talents ADD COLUMN IF NOT EXISTS wait_return_round INTEGER;
 
 -- ─── 面试时间单字段迁移（兼容存量数据库）────────────────────────────────────────────
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS round1_time TIMESTAMPTZ;
@@ -176,14 +174,30 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── 事件身份迁移：补 event_id 并回填存量数据 ─────────────────────────────────────
+ALTER TABLE talent_events ADD COLUMN IF NOT EXISTS event_id TEXT;
+
+UPDATE talent_events
+SET event_id = md5(
+    COALESCE(talent_id, '') || '|' ||
+    COALESCE(at::text, '') || '|' ||
+    COALESCE(actor, '') || '|' ||
+    COALESCE(action, '') || '|' ||
+    COALESCE(payload::text, '')
+)
+WHERE event_id IS NULL;
+
+ALTER TABLE talent_events ALTER COLUMN event_id SET NOT NULL;
+
 -- ─── 事件去重唯一约束 ──────────────────────────────────────────────────────────
 ALTER TABLE talent_events DROP CONSTRAINT IF EXISTS talent_events_talent_id_at_action_key;
+ALTER TABLE talent_events DROP CONSTRAINT IF EXISTS uq_talent_events_dedup;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_talent_events_dedup') THEN
         ALTER TABLE talent_events
             ADD CONSTRAINT uq_talent_events_dedup
-            UNIQUE (talent_id, at, actor, action);
+            UNIQUE (event_id);
     END IF;
 END $$;

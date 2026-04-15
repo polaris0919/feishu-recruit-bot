@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """招聘工作区路径工具。"""
-from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 _LIB_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = _LIB_DIR.parent
@@ -37,7 +36,7 @@ def config_candidates(filename: str) -> List[Path]:
     return [SCRIPTS_DIR / filename, config_dir() / filename]
 
 
-def first_existing(paths: Iterable[Path]) -> Path | None:
+def first_existing(paths: Iterable[Path]) -> Optional[Path]:
     for path in paths:
         if path.is_file():
             return path

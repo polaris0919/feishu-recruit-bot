@@ -1,12 +1,14 @@
 # recruit-ops CLI 参考手册
 
-> **执行目录**：所有命令均在 `scripts/` 目录下执行，例如：
+> **推荐执行方式**：在仓库根目录使用 `uv run python3 scripts/...`；如果是系统 cron，使用 `.venv/bin/python scripts/...`。
 > ```bash
-> cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
-> python3 common/cmd_status.py --talent-id t_xxx
+> cd /home/admin/recruit-workspace/skills/recruit-ops
+> uv run python3 scripts/common/cmd_status.py --talent-id t_xxx
 > ```
 >
 > **推荐主入口**：面试相关的 `confirm` / `result` / `reschedule` 优先使用 `interview/` 目录下的统一命令；`round1/round2` 下的同名脚本仅保留为兼容别名。
+>
+> **下文约定**：为避免每个代码块都重复同一长前缀，下文若看到 `python3 intake/...`、`python3 round1/...`、`python3 round2/...`、`python3 interview/...`、`python3 exam/...`、`python3 common/...` 这类写法，都等价于在仓库根目录执行 `uv run python3 scripts/...`。
 
 ---
 
@@ -45,7 +47,7 @@ ROUND2_SCHEDULING（等候候选人确认）
 ROUND2_SCHEDULED（二面已确认）
   ↓  interview/cmd_result --round 2 --result pass
 ROUND2_DONE_PASS → OFFER_HANDOFF
-  ↘  cmd_round1_defer / cmd_round2_defer
+  ↘  interview/cmd_defer --round 1|2
 WAIT_RETURN（待回国后再约）
   ↓  cmd_wait_return_resume
 ROUND1_SCHEDULING / ROUND2_SCHEDULING
@@ -179,6 +181,8 @@ python3 round1/cmd_round1_result.py --talent-id t_xxx --result reject_delete
 
 ### `cmd_round1_defer.py` — 暂缓一面
 
+> 兼容入口；推荐直接使用 `interview/cmd_defer.py --round 1`。
+
 候选人暂时不在国内/上海时，进入统一 `WAIT_RETURN` 状态，删除日历，待回国后再恢复一面排期。
 
 ```bash
@@ -279,6 +283,8 @@ python3 round2/cmd_round2_reschedule.py --talent-id t_xxx --time "2026-05-25 15:
 ---
 
 ### `cmd_round2_defer.py` — 暂缓二面
+
+> 兼容入口；推荐直接使用 `interview/cmd_defer.py --round 2`。
 
 候选人暂时不在国内/上海，进入统一 `WAIT_RETURN` 状态，删除日历，发通知邮件。
 
@@ -396,6 +402,24 @@ python3 interview/cmd_reschedule.py --talent-id t_xxx --round 2 --time "2026-05-
 
 ---
 
+### `interview/cmd_defer.py` — 面试暂缓
+
+统一处理一面/二面暂缓，进入 `WAIT_RETURN` 并保留恢复轮次。
+
+```bash
+python3 interview/cmd_defer.py --talent-id t_xxx --round 1
+python3 interview/cmd_defer.py --talent-id t_xxx --round 2 --reason "候选人近期在海外"
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--talent-id` | 是 | 候选人 talent_id |
+| `--round` | 是 | `1` 或 `2` |
+| `--reason` | 否 | 暂缓原因 |
+| `--actor` | 否 | 操作人（默认 `system`） |
+
+---
+
 ## 通用管理 common
 
 ### `cmd_status.py` — 查看候选人状态
@@ -454,7 +478,7 @@ python3 common/cmd_interview_reminder.py
 ### `cron_runner.py` — 独立 cron 入口
 
 ```bash
-python3 cron_runner.py
+./.venv/bin/python scripts/cron_runner.py
 ```
 
 ---
@@ -462,6 +486,6 @@ python3 cron_runner.py
 ### `trigger_cron_now.py` — 手动提前触发 cron
 
 ```bash
-python3 trigger_cron_now.py
-python3 trigger_cron_now.py 30
+uv run python3 scripts/trigger_cron_now.py
+uv run python3 scripts/trigger_cron_now.py 30
 ```

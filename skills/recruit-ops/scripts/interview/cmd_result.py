@@ -11,16 +11,13 @@ Round 1 额外选项：
 Round 2 额外选项：
   --result pending      → 暂保留结论
 """
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
+import os
+import sys
 
 import argparse
-import subprocess
 from datetime import datetime
 
-from bg_helpers import send_bg_email, spawn_calendar
+from bg_helpers import send_bg_email
 from core_state import (
     append_audit, ensure_stage_transition, load_candidate, save_candidate,
 )
@@ -45,12 +42,7 @@ def _get_exam_attachments():
 
 def _send_exam_email(talent_id, candidate_email, exam_id, candidate_name=""):
     if side_effects_disabled():
-        return True
-    script = os.path.normpath(os.path.join(
-        os.path.dirname(__file__), "..", "..", "email-send", "scripts", "email_send.py"))
-    if not os.path.isfile(script):
-        print("[result] email_send.py 未找到", file=sys.stderr)
-        return False
+        return send_bg_email(candidate_email, "", "", tag="round1_exam_invite")
     subject = "【笔试邀请】致邃投资 技术岗位笔试"
     body = (
         "您好，{name}，\n\n感谢您参加我们的初步面试！\n\n"
@@ -62,15 +54,17 @@ def _send_exam_email(talent_id, candidate_email, exam_id, candidate_name=""):
         "期待您的回复！\n\n致邃投资 招聘团队"
     ).format(name=candidate_name or "您")
     attachments = _get_exam_attachments()
-    cmd = ["python3", script, "--to", candidate_email, "--subject", subject, "--body", body]
-    for f in attachments:
-        cmd += ["--attachment", f]
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        return result.returncode == 0
+        return send_bg_email(
+            candidate_email,
+            subject,
+            body,
+            tag="round1_exam_invite",
+            attachments=attachments,
+        )
     except Exception as e:
         print("[result] 发邮件失败: {}".format(e), file=sys.stderr)
-        return False
+        return None
 
 
 def _handle_reject_delete(talent_id, round_num, notes):
@@ -134,12 +128,17 @@ def main(argv=None):
             exam_id = "exam-{}-{}".format(talent_id, datetime.now().strftime("%Y%m%d%H%M%S"))
             cand["exam_id"] = exam_id
             cand["exam_sent_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
-            email_ok = None if args.skip_email else _send_exam_email(
+            email_pid = None if args.skip_email else _send_exam_email(
                 talent_id, args.email, exam_id, cand.get("candidate_name", ""))
             append_audit(cand, args.actor, "round1_pass_and_exam_invite_sent",
-                         {"email": args.email, "exam_id": exam_id, "email_sent": email_ok, "notes": args.notes})
+                         {"email": args.email, "exam_id": exam_id, "email_queued": bool(email_pid), "notes": args.notes})
             save_candidate(talent_id, cand)
-            status = "已跳过" if args.skip_email else ("已发送" if email_ok else "发送失败")
+            if args.skip_email:
+                status = "已跳过"
+            elif email_pid:
+                status = "发送中（后台 PID={}）".format(email_pid)
+            else:
+                status = "发送失败"
             lines = [
                 "[一面结果已记录]", "- talent_id: {}".format(talent_id),
                 "- 结果: 一面通过", "- 笔试邀请: {}".format(status),

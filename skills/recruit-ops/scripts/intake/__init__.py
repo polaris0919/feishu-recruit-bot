@@ -1,0 +1,1 @@
+"""Candidate intake commands."""

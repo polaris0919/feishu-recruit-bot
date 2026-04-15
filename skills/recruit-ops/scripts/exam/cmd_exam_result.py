@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
-
 """
 处理 /exam_result 命令：
   - result=pass        → 状态推进到 ROUND2_SCHEDULING，自动给候选人发二面通知邮件
@@ -13,6 +8,7 @@ if _LIB not in sys.path:
 """
 import argparse
 import sys
+from datetime import datetime
 from typing import List, Optional
 from bg_helpers import send_bg_email
 
@@ -130,6 +126,9 @@ def main(argv=None):
         if args.round2_time:
             cand["round2_time"] = args.round2_time
             cand["round2_confirm_status"] = "PENDING"
+            cand["round2_invite_sent_at"] = datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+            cand["round2_calendar_event_id"] = None
+            cand["wait_return_round"] = None
 
         candidate_email = cand.get("candidate_email", "")
 
@@ -173,11 +172,9 @@ def main(argv=None):
             lines.append("- 二面通知邮件: 发送中（后台 PID={}）".format(email_pid))
 
         save_candidate(talent_id, cand)
-
-        # 记录二面邀请发出时间（供48h确认超时判断使用）
         import talent_db as _tdb
         if _tdb._is_enabled():
-            _tdb.save_invite_info(talent_id, 2)
+            _tdb.clear_round_followup_fields(talent_id, 2)
 
         # 方案一：仅记录候选人侧时间，等候选人最终确认后再落老板日历
         if args.round2_time:

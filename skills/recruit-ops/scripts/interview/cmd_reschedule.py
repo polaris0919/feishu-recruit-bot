@@ -4,12 +4,9 @@
 用法：
   python3 interview/cmd_reschedule.py --talent-id t_xxx --round 1|2 --time "YYYY-MM-DD HH:MM" [--confirmed]
 """
-import os, sys
-_LIB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "lib"))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
 
 import argparse
+from datetime import datetime
 from bg_helpers import send_bg_email, spawn_calendar, delete_calendar
 from core_state import append_audit, load_candidate, save_candidate
 
@@ -81,6 +78,9 @@ def main(argv=None):
 
     cand["{}_time".format(prefix)] = new_time
     cand["{}_confirm_status".format(prefix)] = "CONFIRMED" if args.confirmed else "PENDING"
+    cand["{}_invite_sent_at".format(prefix)] = datetime.now().replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    cand["{}_calendar_event_id".format(prefix)] = None
+    cand["wait_return_round"] = None
     if round_num == 1:
         new_stage = "ROUND1_SCHEDULED" if args.confirmed else "ROUND1_SCHEDULING"
     else:
@@ -94,14 +94,9 @@ def main(argv=None):
     })
 
     save_candidate(talent_id, cand)
-
     import talent_db as _tdb
     if _tdb._is_enabled():
-        if round_num == 2:
-            _tdb.clear_calendar_event_id(talent_id, 2)
-        _tdb.save_invite_info(talent_id, round_num)
-        if args.confirmed:
-            _tdb.mark_confirmed(talent_id, round_num)
+        _tdb.clear_round_followup_fields(talent_id, round_num)
 
     lines = [
         "[{}重新约时间]".format(round_label),
