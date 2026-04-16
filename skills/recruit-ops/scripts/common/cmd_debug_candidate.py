@@ -8,6 +8,7 @@
 """
 
 import argparse
+import sys
 import json
 
 import psycopg2
