@@ -1,0 +1,17 @@
+{
+  "channels": {
+    "feishu": {
+      "accounts": {
+        "feishubot": {
+          "appId": "cli_xxxxxxxxxxxxxxxx",
+          "appSecret": "your_feishu_app_secret",
+          "encryptKey": "",
+          "verificationToken": "",
+          "ownerOpenId": "ou_xxx_boss",
+          "hrOpenId": "ou_xxx_hr",
+          "calendarId": "feishu.cn_xxx@group.calendar.feishu.cn"
+        }
+      }
+    }
+  }
+}

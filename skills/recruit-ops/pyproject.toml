@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recruit-ops"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "psycopg2-binary",
+    "python-dateutil",
+    "lark-oapi",
+    "pdfminer-six==20200517",
+]
+
+[tool.setuptools]
+packages = [
+    "common",
+    "exam",
+    "intake",
+    "interview",
+    "lib",
+    "lib.feishu",
+    "round1",
+    "round2",
+    "tests",
+]
+py-modules = [
+    "bg_helpers",
+    "cmd_exam_result",
+    "cmd_ingest_cv",
+    "cmd_reschedule_request",
+    "cmd_round1_defer",
+    "cmd_round2_defer",
+    "config",
+    "core_state",
+    "daily_exam_review",
+    "exam_prereview",
+    "feishu",
+    "recruit_paths",
+    "side_effect_guard",
+    "talent_db",
+]
+
+[tool.setuptools.package-dir]
+"" = "scripts"

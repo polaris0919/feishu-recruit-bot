@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Accidental / editor noise
+**/sfully*
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Local runtime config / state
+config/*.json
+state/*.json
+!config/*.example.json
+!state/*.example.json
+
+# Local compatibility symlinks / runtime pointers
+recruit_state.json
+talent-db-config.json
+
+# Runtime inbound CV attachments
+data/media/inbound/
+!data/media/inbound/.gitkeep
+
+# Runtime exam artifacts
+data/exam_txt/*.tar
+data/exam_txt/*.tar.gz
