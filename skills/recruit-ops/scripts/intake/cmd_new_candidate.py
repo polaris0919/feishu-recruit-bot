@@ -142,7 +142,7 @@ def main(argv=None):
             print(
                 "ERROR: 检测到【导入候选人】标识符。\n"
                 "此命令（cmd_new_candidate.py）仅处理【新候选人】模板。\n"
-                "请改用：python3 intake/cmd_import_candidate.py --template \"<消息原文>\"\n"
+                "请改用：uv run python3 scripts/intake/cmd_import_candidate.py --template \"<消息原文>\"\n"
                 "cmd_import_candidate.py 支持指定当前阶段，不会重复发送邮件。"
             )
             return 1
@@ -230,7 +230,11 @@ def main(argv=None):
     lines.append("- 当前阶段 : NEW（等待老板安排一面时间）")
     lines.append("")
     lines.append("老板可通过以下命令安排一面：")
-    lines.append("  python3 round1/cmd_round1_schedule.py --talent-id {} --time \"YYYY-MM-DD HH:MM\"".format(talent_id))
+    lines.append(
+        "  uv run python3 scripts/round1/cmd_round1_schedule.py --talent-id {} --time \"YYYY-MM-DD HH:MM\"".format(
+            talent_id
+        )
+    )
 
     output = "\n".join(lines)
     print(output)

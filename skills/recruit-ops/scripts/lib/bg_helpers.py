@@ -13,9 +13,18 @@ from side_effect_guard import fake_pid, side_effects_disabled
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-EMAIL_SEND_SCRIPT = str(
-    workspace_path("skills", "email-send", "scripts", "email_send.py")
-)
+_EMAIL_SEND_SCRIPT_CANDIDATES = [
+    str(workspace_path("skills", "email-send", "scripts", "email_send.py")),
+    os.path.expanduser("~/.hermes/skills/openclaw-imports/email-send/scripts/email_send.py"),
+]
+
+
+def _email_send_script():
+    # type: () -> str
+    for path in _EMAIL_SEND_SCRIPT_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return _EMAIL_SEND_SCRIPT_CANDIDATES[-1]
 
 
 def send_bg_email(to, subject, body, tag="email", attachments=None):
@@ -23,7 +32,7 @@ def send_bg_email(to, subject, body, tag="email", attachments=None):
     """后台发送邮件，返回 PID。tag 用于区分日志文件名。"""
     if side_effects_disabled():
         return fake_pid()
-    cmd = ["python3", EMAIL_SEND_SCRIPT, "--to", to, "--subject", subject, "--body", body]
+    cmd = ["python3", _email_send_script(), "--to", to, "--subject", subject, "--body", body]
     for attachment in (attachments or []):
         if attachment:
             cmd += ["--attachment", attachment]

@@ -391,11 +391,11 @@ def _preview_new(fields, file_path):
     lines += [
         "",
         "[OC_CMD_ON_CONFIRM]",
-        "python3 intake/cmd_new_candidate.py {}".format(" ".join(cmd_args)),
+        "uv run python3 scripts/intake/cmd_new_candidate.py {}".format(" ".join(cmd_args)),
         "",
         "[OC_NOTE]",
         "若 HR 修正了某字段，在 [OC_CMD_ON_CONFIRM] 中替换对应参数的值后执行。",
-        "若 HR 指定了非 NEW 的阶段，改用 python3 intake/cmd_import_candidate.py 并附加 --stage 参数。",
+        "若 HR 指定了非 NEW 的阶段，改用 uv run python3 scripts/intake/cmd_import_candidate.py --template \"<消息原文>\"。",
     ]
 
     return "\n".join(lines)

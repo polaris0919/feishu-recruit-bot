@@ -10,6 +10,7 @@ dependencies = [
     "psycopg2-binary",
     "python-dateutil",
     "lark-oapi",
+    "pdfminer-six==20200517",
 ]
 
 [tool.setuptools]

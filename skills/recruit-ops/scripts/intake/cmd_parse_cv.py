@@ -191,7 +191,7 @@ def _extract_text_from_pdf(pdf_bytes):
         from pdfminer.layout import LAParams
     except ImportError:
         raise RuntimeError(
-            "未安装 pdfminer.six，请运行：pip3 install --user 'pdfminer.six==20200517' --no-deps"
+            "未安装 pdfminer.six，请先执行：uv sync；如仍缺失，可执行：uv pip install 'pdfminer.six==20200517' --no-deps"
         )
 
     output = io.StringIO()
@@ -382,7 +382,7 @@ def _format_preview(fields, pdf_path=None):
 
     lines.append("")
     lines.append("[OC_CMD_ON_CONFIRM]")
-    lines.append("python3 intake/cmd_new_candidate.py {}".format(" ".join(cmd_args)))
+    lines.append("uv run python3 scripts/intake/cmd_new_candidate.py {}".format(" ".join(cmd_args)))
 
     return "\n".join(lines)
 
@@ -395,7 +395,7 @@ def main(argv=None):
     print(
         "ERROR: cmd_parse_cv.py 已废弃。\n"
         "请改用 cmd_ingest_cv.py，它会自动判断候选人是否已在库中：\n"
-        "  python3 intake/cmd_ingest_cv.py --pdf-path <路径> --filename <文件名>",
+        "  uv run python3 scripts/intake/cmd_ingest_cv.py --pdf-path <路径> --filename <文件名>",
         file=sys.stderr,
     )
     return 1

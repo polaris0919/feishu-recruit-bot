@@ -145,7 +145,7 @@ def main(argv=None):
     lines.append("- 飞书日历: 待候选人确认后自动创建")
     lines.append("")
     lines.append("候选人回复后，系统将自动扫描邮件分析意图，确认后创建日历。")
-    lines.append("手动触发扫描：python3 exam/daily_exam_review.py")
+    lines.append("手动触发扫描：uv run python3 scripts/exam/daily_exam_review.py")
 
     print("\n".join(lines))
     return 0
