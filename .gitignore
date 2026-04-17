@@ -22,3 +22,6 @@ build/
 config/*.json
 state/*.json
 !config/*.example.json
+
+# Runtime inbound CV attachments
+data/media/inbound/

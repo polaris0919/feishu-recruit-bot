@@ -1411,10 +1411,21 @@ def format_reschedule_request_report(item):
     )
 
 
+def _deliver_report(fn, report, auto_mode):
+    # type: (Any, str, bool) -> bool
+    """发送飞书报告；在非 auto 模式下保留 stdout，同时返回真实发送结果。"""
+    if auto_mode:
+        return bool(fn.send_text(report))
+    print(report)
+    return bool(fn.send_text(report))
+
+
 def _run_reschedule_scan(args, fn):
     """运行已确认候选人改期/暂缓/线上请求扫描（一面 + 二面），处理结果并推送飞书。"""
     reschedule_script = os.path.join(_SCRIPTS, "common", "cmd_reschedule_request.py")
     total = 0
+    delivered = 0
+    failed = 0
 
     for round_num in (1, 2):
         round_label = "一面" if round_num == 1 else "二面"
@@ -1477,15 +1488,18 @@ def _run_reschedule_scan(args, fn):
                     report = format_reschedule_request_report(item)
                     report += "\n\u26a0 自动处理失败: {}".format(e)
 
-            if args.auto:
-                fn.send_text(report)
+            if _deliver_report(fn, report, args.auto):
+                delivered += 1
             else:
-                print(report)
-                fn.send_text(report)
+                failed += 1
             total += 1
 
     if total and args.auto:
-        print("[email_scan] 改期请求扫描：{} 条更新，已推送飞书。".format(total))
+        if failed:
+            print("[email_scan] 改期请求扫描：{} 条更新，飞书推送成功 {} 条，失败 {} 条。".format(
+                total, delivered, failed))
+        else:
+            print("[email_scan] 改期请求扫描：{} 条更新，已推送飞书。".format(total))
     elif not total and not args.auto:
         print("[email_scan] 暂无已确认候选人改期请求。")
 
@@ -1515,15 +1529,20 @@ def main(argv=None):
     if run_exam:
         exam_results = scan_new_replies(auto_mode=args.auto)
         if exam_results:
+            delivered = 0
+            failed = 0
             for r in exam_results:
                 report = format_report(r)
-                if args.auto:
-                    fn.send_text(report)
+                if _deliver_report(fn, report, args.auto):
+                    delivered += 1
                 else:
-                    print(report)
-                    fn.send_text(report)
+                    failed += 1
             if args.auto:
-                print("[email_scan] 共发现 {} 封新笔试回复，已推送飞书。".format(len(exam_results)))
+                if failed:
+                    print("[email_scan] 共发现 {} 封新笔试回复，飞书推送成功 {} 条，失败 {} 条。".format(
+                        len(exam_results), delivered, failed))
+                else:
+                    print("[email_scan] 共发现 {} 封新笔试回复，已推送飞书。".format(len(exam_results)))
         elif not args.auto:
             print("[email_scan] 暂无新的笔试回复邮件。")
 
@@ -1541,6 +1560,8 @@ def main(argv=None):
             rx_results = scan_round2_confirmations(auto_mode=args.auto)
 
         if rx_results:
+            delivered = 0
+            failed = 0
             for item in rx_results:
                 intent = item.get("intent", "unknown")
                 talent_id = item["talent_id"]
@@ -1647,14 +1668,17 @@ def main(argv=None):
                 else:
                     report = format_interview_confirmation_report(item)
 
-                if args.auto:
-                    fn.send_text(report)
+                if _deliver_report(fn, report, args.auto):
+                    delivered += 1
                 else:
-                    print(report)
-                    fn.send_text(report)
+                    failed += 1
             if args.auto:
-                print("[email_scan] {}确认扫描：{} 条更新，已推送飞书。".format(
-                    round_label, len(rx_results)))
+                if failed:
+                    print("[email_scan] {}确认扫描：{} 条更新，飞书推送成功 {} 条，失败 {} 条。".format(
+                        round_label, len(rx_results), delivered, failed))
+                else:
+                    print("[email_scan] {}确认扫描：{} 条更新，已推送飞书。".format(
+                        round_label, len(rx_results)))
         elif not args.auto:
             print("[email_scan] 暂无{}确认待处理。".format(round_label))
 

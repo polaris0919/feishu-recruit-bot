@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """公共跨阶段操作测试：改期请求 / 改期报告扫描。"""
 import io
+import json
 import os
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import datetime as dt
 from unittest import mock
 
 from tests.helpers import call_main, new_candidate, wipe_state
-from core_state import load_candidate
+from core_state import load_candidate, save_candidate
 import talent_db
 from tests.scenario_helpers import ScenarioRunner, make_reply_email, subprocess_result_from_call_main
 
@@ -57,6 +58,68 @@ def _setup_confirmed_r1(calendar_event_id=None):
     if calendar_event_id:
         talent_db.update_calendar_event_id(tid, 1, calendar_event_id)
     return tid
+
+
+class TestTodayInterviews(unittest.TestCase):
+
+    def setUp(self):
+        wipe_state()
+
+    def _set_interview(self, tid, round_num, interview_time, confirm_status):
+        cand = load_candidate(tid)
+        cand["round{}_time".format(round_num)] = interview_time
+        cand["round{}_confirm_status".format(round_num)] = confirm_status
+        save_candidate(tid, cand)
+
+    def test_today_interviews_lists_round1_and_round2(self):
+        today = dt.datetime.now().strftime("%Y-%m-%d")
+        tid1 = new_candidate(name="今日一面人", email="today-r1@example.com")
+        tid2 = new_candidate(name="今日二面人", email="today-r2@example.com")
+        self._set_interview(tid1, 1, "{} 10:00".format(today), "CONFIRMED")
+        self._set_interview(tid2, 2, "{} 15:00".format(today), "PENDING")
+
+        out, err, rc = call_main("common.cmd_today_interviews", [])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("今天（{}）的面试安排".format(today), out)
+        self.assertIn("今日一面人 ({}) | 一面 | 已确认".format(tid1), out)
+        self.assertIn("今日二面人 ({}) | 二面 | 待确认".format(tid2), out)
+
+    def test_today_interviews_supports_date_filter(self):
+        target_date = "2026-04-20"
+        other_date = "2026-04-21"
+        tid1 = new_candidate(name="指定日期人", email="on-date@example.com")
+        tid2 = new_candidate(name="其他日期人", email="other-date@example.com")
+        self._set_interview(tid1, 1, "{} 09:30".format(target_date), "CONFIRMED")
+        self._set_interview(tid2, 2, "{} 14:00".format(other_date), "CONFIRMED")
+
+        out, err, rc = call_main("common.cmd_today_interviews", ["--date", target_date])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("日期（{}）的面试安排".format(target_date), out)
+        self.assertIn("指定日期人 ({})".format(tid1), out)
+        self.assertNotIn("其他日期人", out)
+
+    def test_today_interviews_confirmed_only_filters_pending(self):
+        today = dt.datetime.now().strftime("%Y-%m-%d")
+        confirmed_tid = new_candidate(name="已确认人", email="confirmed@example.com")
+        pending_tid = new_candidate(name="待确认人", email="pending@example.com")
+        self._set_interview(confirmed_tid, 1, "{} 10:30".format(today), "CONFIRMED")
+        self._set_interview(pending_tid, 2, "{} 16:00".format(today), "PENDING")
+
+        out, err, rc = call_main("common.cmd_today_interviews", ["--confirmed-only"])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("今天（{}）的已确认面试安排".format(today), out)
+        self.assertIn("已确认人 ({})".format(confirmed_tid), out)
+        self.assertNotIn("待确认人", out)
+
+    def test_today_interviews_json_empty_result(self):
+        target_date = "2030-01-01"
+        out, err, rc = call_main("common.cmd_today_interviews", ["--date", target_date, "--json"])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        payload = json.loads(out)
+        self.assertEqual(payload["date"], target_date)
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["items"], [])
+        self.assertFalse(payload["confirmed_only"])
 
 
 class TestRescheduleRequest(unittest.TestCase):

@@ -132,7 +132,7 @@ def main(argv=None):
             candidate_name=candidate_name,
             tag="round{}_reschedule".format(round_num),
         )
-        lines.append("- 老板飞书日历: 已按确认时间创建新事件（后台 PID={}）".format(cal_pid))
+        lines.append("- 老板飞书日历: 已触发后台创建新事件（PID={}），请以实际日历结果/后台日志为准".format(cal_pid))
     else:
         lines.append("- 老板飞书日历: 暂不创建，待候选人确认后再落盘")
 

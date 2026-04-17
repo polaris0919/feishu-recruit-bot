@@ -1,6 +1,6 @@
 # recruit-ops CLI 参考手册
 
-> **推荐执行方式**：在仓库根目录使用 `uv run python3 scripts/...`；如果是系统 cron，使用 `.venv/bin/python scripts/...`。
+> **推荐执行方式**：在 `skills/recruit-ops` 仓库根目录使用 `uv run python3 scripts/...`；如果是系统 cron，使用 `PYTHONPATH=scripts ./.venv/bin/python scripts/...`（`scripts/` 下的模块互相靠相对顶层包 import，例如 `from core_state import ...`，必须把它加到 `PYTHONPATH`）。
 > ```bash
 > cd /home/admin/recruit-workspace/skills/recruit-ops
 > uv run python3 scripts/common/cmd_status.py --talent-id t_xxx
@@ -9,6 +9,18 @@
 > **推荐主入口**：面试相关的 `confirm` / `result` / `reschedule` 优先使用 `interview/` 目录下的统一命令；`round1/round2` 下的同名脚本仅保留为兼容别名。
 >
 > **下文约定**：为避免每个代码块都重复同一长前缀，下文若看到 `python3 intake/...`、`python3 round1/...`、`python3 round2/...`、`python3 interview/...`、`python3 exam/...`、`python3 common/...` 这类写法，都等价于在仓库根目录执行 `uv run python3 scripts/...`。
+>
+> **talent-id 约定**：除 `common/cmd_remove.py` 同时兼容 `--talent_id` 外，所有其他脚本都**只**接受 `--talent-id`（带连字符）。
+>
+> **`--template` 多行参数**：bash 的双引号里 `\n` 是字面量、不会转义换行。请用 heredoc 或 `$'…'` 形式传入，例如：
+> ```bash
+> python3 intake/cmd_new_candidate.py --template "$(cat <<'EOF'
+> 【新候选人】
+> 姓名：张三
+> 邮箱：zhangsan@example.com
+> EOF
+> )"
+> ```
 
 ---
 
@@ -82,40 +94,84 @@ python3 intake/cmd_ingest_cv.py --file-path resume.pdf --filename "张三_简历
 
 ---
 
-### `cmd_attach_cv.py` — 给已有候选人补挂简历
+### `cmd_attach_cv.py` — 给已有候选人挂简历 / 更新字段
+
+> 通常由 `cmd_ingest_cv.py` 的预览结果自动生成命令，HR 确认后执行；也可手动调用。
+> **必须加 `--confirm`**，防止误写。
 
 ```bash
-python3 intake/cmd_attach_cv.py --talent-id t_xxx --pdf-path /path/to/resume.pdf
+# 仅挂简历
+python3 intake/cmd_attach_cv.py --talent-id t_xxx --cv-path /path/to/resume.pdf --confirm
+
+# 挂简历 + 同步更新若干字段（每个字段一个 --field）
+python3 intake/cmd_attach_cv.py --talent-id t_xxx --cv-path /path/to/resume.pdf --confirm \
+    --field education=博士 --field school="复旦大学"
 ```
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
 | `--talent-id` | 是 | 候选人 talent_id |
-| `--pdf-path` | 是 | PDF 文件路径 |
+| `--cv-path` | 否 | 简历本地路径（会写入 `cv_path` 字段） |
+| `--confirm` | 是 | 显式确认才会执行写入 |
+| `--field key=value` | 否 | 同步更新白名单字段，可重复。允许的 key：`candidate_name` / `candidate_email` / `phone` / `wechat` / `position` / `education` / `school` / `work_years` / `source` / `experience` |
 
 ---
 
-### `cmd_parse_cv.py` — 仅解析简历，不入库
+### `cmd_parse_cv.py` — 已废弃
 
-```bash
-python3 intake/cmd_parse_cv.py --pdf-path /path/to/resume.pdf
-```
+> ⚠️ 此脚本 `main()` 已弃用，直接执行会返回非零并打印迁移提示。**请统一使用 `cmd_ingest_cv.py`**，它会自动判断候选人是否已在库中并分支处理（新候选人走解析+预览，老候选人走字段比对+差异预览）。
+>
+> 脚本内部仍有 `_llm_parse_cv_fields` / `_extract_text_from_pdf` 等工具函数，供 `cmd_ingest_cv.py` import 使用，不再作为 CLI 入口暴露。
 
 ---
 
 ### `cmd_new_candidate.py` — 手工录入候选人
 
+> ⚠️ 模板必须是**真正的多行文本**；bash 双引号里的 `\n` 不会转义，请用 heredoc 或 `$'…'`：
+
 ```bash
-python3 intake/cmd_new_candidate.py --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
+# 推荐：heredoc
+python3 intake/cmd_new_candidate.py --template "$(cat <<'EOF'
+【新候选人】
+姓名：张三
+邮箱：zhangsan@example.com
+EOF
+)"
+
+# 或：$'...' 语法
+python3 intake/cmd_new_candidate.py --template $'【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com'
+
+# 也可以用逐字段参数
+python3 intake/cmd_new_candidate.py --name 张三 --email zhangsan@example.com \
+    --position 量化研究员 --school 复旦大学 --feishu-notify
 ```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--template` | 否 | 【新候选人】多行模板原文（自动解析字段） |
+| `--name` | 是（或用 template） | 候选人姓名 |
+| `--email` | 是（或用 template） | 候选人邮箱（发笔试用） |
+| `--phone` / `--wechat` / `--position` / `--education` / `--school` | 否 | 可选字段 |
+| `--work-years` | 否 | 整数 |
+| `--source` / `--resume-summary` / `--experience` / `--cv-path` | 否 | 来源 / 摘要 / 简历路径 |
+| `--feishu-notify` | 否 | 录入成功后飞书通知老板 |
 
 ---
 
-### `cmd_import_candidate.py` — 导入历史候选人
+### `cmd_import_candidate.py` — 导入历史候选人（可指定当前阶段）
 
 ```bash
-python3 intake/cmd_import_candidate.py --template "【导入候选人】\n姓名：李四\n邮箱：lisi@example.com\n当前阶段：笔试中"
+python3 intake/cmd_import_candidate.py --template "$(cat <<'EOF'
+【导入候选人】
+姓名：李四
+邮箱：lisi@example.com
+当前阶段：笔试中
+一面时间：2026-03-15 14:00
+EOF
+)"
 ```
+
+> `当前阶段` 必填；若阶段为 `一面邀请中` / `一面已确认` 需要提供 `一面时间`；若阶段为 `二面邀请中` / `二面已确认` / `二面完成` 需要提供 `二面时间`。详细阶段词表见 `scripts/intake/cmd_import_candidate.py` 顶部 docstring。
 
 ---
 
@@ -217,7 +273,7 @@ python3 exam/cmd_exam_result.py --talent-id t_xxx --result reject_delete
 |------|------|------|
 | `--talent-id` | 是 | 候选人 talent_id |
 | `--result` | 是 | `pass` / `reject_keep` / `reject_delete` |
-| `--round2-time` | result=pass 时强烈建议 | 建议二面时间，格式 `YYYY-MM-DD HH:MM` |
+| `--round2-time` | result=pass 时**必填** | 二面时间，格式 `YYYY-MM-DD HH:MM`；脚本会拒绝复用旧二面时间 |
 | `--notes` | 否 | 备注（写入审计日志） |
 | `--actor` | 否 | 执行人（默认 `system`） |
 
@@ -370,11 +426,11 @@ python3 interview/cmd_result.py --talent-id t_xxx --round 2 --result reject_dele
 |------|------|------|
 | `--talent-id` | 是 | 候选人 talent_id |
 | `--round` | 是 | `1` 或 `2` |
-| `--result` | 是 | `pass` / `pass_direct` / `pending` / `reject_keep` / `reject_delete` |
-| `--email` | 否 | 候选人邮箱（一面 pass 时发笔试用） |
-| `--round2-time` | 否 | pass_direct 时的二面时间 |
-| `--notes` | 否 | 备注（审计日志） |
-| `--skip-email` | 否 | 跳过自动发邮件 |
+| `--result` | 是 | round 1：`pass` / `pass_direct` / `reject_keep` / `reject_delete`；round 2：`pass` / `pending` / `reject_keep` / `reject_delete` |
+| `--email` | round1 + `pass` 时**必填** | 候选人邮箱（发笔试用），其他场景可选，会覆盖库中邮箱 |
+| `--round2-time` | round1 + `pass_direct` 时**必填** | 二面时间，格式 `YYYY-MM-DD HH:MM` |
+| `--notes` | 否 | 备注（写入审计日志） |
+| `--skip-email` | 否 | round1 + `pass` 时跳过实际发笔试邮件（仅改状态） |
 | `--actor` | 否 | 执行人（默认 `system`） |
 
 ---
@@ -396,8 +452,7 @@ python3 interview/cmd_reschedule.py --talent-id t_xxx --round 2 --time "2026-05-
 | `--talent-id` | 是 | 候选人 talent_id |
 | `--round` | 是 | `1` 或 `2` |
 | `--time` | 是 | 新的面试时间，格式 `YYYY-MM-DD HH:MM` |
-| `--confirmed` | 否 | 老板明确确认该时间（默认 `False`） |
-| `--no-confirm` | 否 | 明确等候候选人确认（与 `--confirmed` 互斥） |
+| `--confirmed` / `--no-confirm` | 否 | 同一开关的 on/off 两个形式（共享 dest，后写的生效）。默认 `False`，即默认等候选人再确认 |
 | `--actor` | 否 | 操作人（默认 `boss`） |
 
 ---
@@ -440,6 +495,30 @@ python3 common/cmd_search.py --all-active
 
 ---
 
+### `cmd_today_interviews.py` — 查看指定日期的面试安排
+
+```bash
+# 查看今天的面试安排
+python3 common/cmd_today_interviews.py
+
+# 查看指定日期
+python3 common/cmd_today_interviews.py --date 2026-04-17
+
+# 只看已确认面试
+python3 common/cmd_today_interviews.py --confirmed-only
+
+# 输出 JSON
+python3 common/cmd_today_interviews.py --date 2026-04-17 --json
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--date` | 否 | 目标日期，格式 `YYYY-MM-DD`，默认今天 |
+| `--confirmed-only` | 否 | 只显示已确认的面试 |
+| `--json` | 否 | 输出 JSON，便于脚本调用 |
+
+---
+
 ### `cmd_remove.py` — 物理删除候选人
 
 ```bash
@@ -477,8 +556,20 @@ python3 common/cmd_interview_reminder.py
 
 ### `cron_runner.py` — 独立 cron 入口
 
+> 内部通过 `python -m exam.daily_exam_review` / `python -m common.cmd_interview_reminder` 调用，**必须把 `scripts/` 加进 `PYTHONPATH`**，否则 import 不到子模块。
+
 ```bash
-./.venv/bin/python scripts/cron_runner.py
+cd /home/admin/recruit-workspace/skills/recruit-ops
+PYTHONPATH=scripts ./.venv/bin/python scripts/cron_runner.py
+```
+
+在 systemd user unit 里可以等价写成：
+
+```ini
+[Service]
+WorkingDirectory=/home/admin/recruit-workspace/skills/recruit-ops
+Environment=PYTHONPATH=/home/admin/recruit-workspace/skills/recruit-ops/scripts
+ExecStart=/home/admin/recruit-workspace/skills/recruit-ops/.venv/bin/python scripts/cron_runner.py
 ```
 
 ---

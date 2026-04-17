@@ -5,10 +5,11 @@
 """
 import os
 import subprocess
+import sys
 import time
 from typing import Iterable, Optional
 
-from recruit_paths import workspace_path
+from recruit_paths import scripts_dir, workspace_path
 from side_effect_guard import fake_pid, side_effects_disabled
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,18 @@ _EMAIL_SEND_SCRIPT_CANDIDATES = [
     str(workspace_path("skills", "email-send", "scripts", "email_send.py")),
     os.path.expanduser("~/.hermes/skills/openclaw-imports/email-send/scripts/email_send.py"),
 ]
+
+
+def _recruit_subprocess_env():
+    # type: () -> dict
+    env = os.environ.copy()
+    scripts_path = scripts_dir()
+    existing = (env.get("PYTHONPATH") or "").strip()
+    env["PYTHONPATH"] = (
+        scripts_path if not existing else scripts_path + os.pathsep + existing
+    )
+    env.setdefault("RECRUIT_WORKSPACE_ROOT", str(workspace_path()))
+    return env
 
 
 def _email_send_script():
@@ -62,7 +75,7 @@ def spawn_calendar(
     if side_effects_disabled():
         return fake_pid()
     script = os.path.join(_HERE, "feishu", "calendar_cli.py")
-    cmd = ["python3", script, "--talent-id", talent_id, "--round2-time", event_time]
+    cmd = [sys.executable, script, "--talent-id", talent_id, "--round2-time", event_time]
     if event_round != 2:
         cmd += ["--event-round", str(event_round)]
     if candidate_email:
@@ -75,7 +88,13 @@ def spawn_calendar(
     log_path = "/tmp/feishu_cal_{}_{}_{}.log".format(tag, talent_id, int(time.time()))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(
-        cmd, start_new_session=True, stdout=log_fp, stderr=log_fp, close_fds=True,
+        cmd,
+        start_new_session=True,
+        stdout=log_fp,
+        stderr=log_fp,
+        close_fds=True,
+        cwd=scripts_dir(),
+        env=_recruit_subprocess_env(),
     )
     log_fp.close()
     with open("/tmp/feishu_calendar_bg.log", "a") as f:
@@ -90,11 +109,17 @@ def delete_calendar(event_id, tag="cal_delete"):
     if side_effects_disabled():
         return fake_pid()
     script = os.path.join(_HERE, "feishu", "calendar_cli.py")
-    cmd = ["python3", script, "--talent-id", "delete-only", "--delete-event-id", event_id]
+    cmd = [sys.executable, script, "--talent-id", "delete-only", "--delete-event-id", event_id]
     log_path = "/tmp/feishu_cal_delete_{}_{}.log".format(event_id[:16], int(time.time()))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(
-        cmd, start_new_session=True, stdout=log_fp, stderr=log_fp, close_fds=True,
+        cmd,
+        start_new_session=True,
+        stdout=log_fp,
+        stderr=log_fp,
+        close_fds=True,
+        cwd=scripts_dir(),
+        env=_recruit_subprocess_env(),
     )
     log_fp.close()
     with open("/tmp/feishu_calendar_bg.log", "a") as f:

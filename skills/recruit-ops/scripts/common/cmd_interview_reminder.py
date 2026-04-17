@@ -5,6 +5,8 @@
 v2: 使用 feishu_client 替代 feishu_notify，talent_db 直接导入。
 """
 
+import sys
+
 import feishu
 import talent_db
 

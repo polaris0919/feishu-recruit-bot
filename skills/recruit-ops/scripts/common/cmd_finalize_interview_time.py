@@ -107,7 +107,7 @@ def main(argv=None):
             return 1
         lines.append("- 原时间: {}".format(current_time or "（未设定）"))
         lines.append("- 最终确认时间: {}".format(final_time))
-        lines.append("- 状态: 已确认并创建日历")
+        lines.append("- 状态: 已确认")
         if out:
             lines.append("")
             lines.append(out)
@@ -123,7 +123,7 @@ def main(argv=None):
                 print(out, file=sys.stderr)
             return 1
         lines.append("- 确认时间: {}".format(final_time))
-        lines.append("- 状态: 已确认并创建日历")
+        lines.append("- 状态: 已确认")
         if out:
             lines.append("")
             lines.append(out)

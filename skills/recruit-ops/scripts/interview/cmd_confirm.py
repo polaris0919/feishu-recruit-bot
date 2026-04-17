@@ -71,7 +71,7 @@ def main(argv=None):
             cal_pid = _spawn_calendar_bg(
                 talent_id, interview_time, round_num, candidate_email, candidate_name,
             )
-            lines.append("- 飞书日历: 创建中（后台 PID={}），约10秒后完成".format(cal_pid))
+            lines.append("- 飞书日历: 已触发后台创建（PID={}），请以实际日历结果/后台日志为准".format(cal_pid))
 
         print("\n".join(lines))
         return 0

@@ -33,7 +33,7 @@
 | 特性 | 说明 |
 |------|------|
 | **全流程自动化** | 从 HR 录入候选人，到一面邀请、笔试、二面、结果归档，全程自动流转 |
-| **双角色设计** | HR 使用飞书消息模板；老板用自然语言（`recruit-boss` Skill）与 OC 对话 |
+| **双角色设计** | HR 使用飞书消息模板；老板用自然语言（`recruit-ops` Skill）与 OC 对话；同一个 skill 同时服务两侧 |
 | **邮件协商** | OC 自动向候选人发送面试邀请邮件，LLM 解析候选人回复意图（确认/改期/不明） |
 | **飞书日历** | 仅在候选人最终确认面试时间后，才在老板飞书日历创建日程，老板收到邀请通知 |
 | **超时自动确认** | 候选人 48 小时未回复邮件，系统默认确认，自动创建日历 |
@@ -283,7 +283,7 @@ OC 自动发送邀请邮件给候选人，等待候选人回复。
       │  WebSocket（飞书 OpenAPI）
       ▼
 Hermes Gateway（:17166）
-      │  技能路由：recruit-ops / recruit-boss
+      │  技能路由：recruit-ops
       ▼
 LLM Agent（qwen3-max，阿里云 DashScope）
       │  exec tool 调用 Python 脚本
@@ -458,6 +458,26 @@ export INTERVIEW_CONFIRM_TIMEOUT_MINUTES=2880  # 超时确认阈值（默认 48h
 
 **如何获取飞书 open_id：**
 让对方在飞书向机器人发送任意消息，查看 Gateway 日志中的 `received message from <open_id>`。
+
+### 8.3.1 Skill 文件链接方式
+
+当前本地部署采用**单一源文件 + Hermes 软链接**的方式：
+
+- 源文件：`/home/admin/recruit-workspace/docs/recruit-ops-SKILL.md`
+- Hermes 运行时入口：`~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md`
+
+其中 Hermes 路径下的 `SKILL.md` 是一个**软链接**，指向 workspace 中的源文件。
+
+规则：
+
+- 日常只编辑 `recruit-workspace/docs/recruit-ops-SKILL.md`
+- 不要直接覆盖 `~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md`
+- 如需重建链接，可执行：
+
+```bash
+rm ~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md
+ln -s /home/admin/recruit-workspace/docs/recruit-ops-SKILL.md ~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md
+```
 
 ### 8.4 数据库初始化
 
