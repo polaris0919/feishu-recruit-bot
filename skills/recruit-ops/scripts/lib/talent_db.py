@@ -34,10 +34,16 @@ def _is_enabled():
     return _cfg.db_enabled()
 
 
+def _conn_params():
+    # type: () -> dict
+    """Backward-compatible DB params helper for legacy callers."""
+    return _cfg.db_conn_params()
+
+
 @contextmanager
 def _connect():
     """上下文管理器：获取连接，自动提交或回滚，最后关闭。"""
-    conn = psycopg2.connect(**_cfg.db_conn_params())
+    conn = psycopg2.connect(**_conn_params())
     try:
         yield conn
         conn.commit()
