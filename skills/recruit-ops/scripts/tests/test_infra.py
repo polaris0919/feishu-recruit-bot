@@ -4,43 +4,52 @@ import os
 import unittest
 from unittest import mock
 
-from tests.helpers import call_main, real_talent_db, wipe_state
+from tests.helpers import call_main, patch_module, real_talent_db, wipe_state
 
 
 class TestCoreState(unittest.TestCase):
 
     def test_stages_set_is_complete(self):
-        import core_state
+        from lib import core_state
+        # v3.6: OFFER_HANDOFF / *_DONE_REJECT_DELETE 已下线，见
+        # 20260427_v36_drop_offer_handoff.sql / 20260428_v36_drop_done_reject_delete.sql。
         expected = {
-            "NEW", "ROUND1_SCHEDULING", "ROUND1_SCHEDULED", "ROUND1_DONE_PASS",
-            "ROUND1_DONE_REJECT_KEEP", "ROUND1_DONE_REJECT_DELETE",
-            "EXAM_SENT", "EXAM_REVIEWED", "WAIT_RETURN",
-            "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING",
-            "ROUND2_DONE_PASS", "ROUND2_DONE_REJECT_KEEP", "ROUND2_DONE_REJECT_DELETE",
-            "OFFER_HANDOFF",
+            "NEW", "ROUND1_SCHEDULING", "ROUND1_SCHEDULED",
+            "EXAM_SENT", "EXAM_REVIEWED", "EXAM_REJECT_KEEP", "WAIT_RETURN",
+            "ROUND2_SCHEDULING", "ROUND2_SCHEDULED",
+            "ROUND2_DONE_REJECT_KEEP",
+            "POST_OFFER_FOLLOWUP",
         }
-        self.assertTrue(expected.issubset(core_state.STAGES))
+        self.assertEqual(expected, core_state.STAGES)
+
+    def test_stages_do_not_include_dropped(self):
+        """v3.6 删的 3 个 stage 不应再出现在 STAGES / STAGE_LABELS。"""
+        from lib import core_state
+        dropped = {"OFFER_HANDOFF", "ROUND1_DONE_REJECT_DELETE",
+                   "ROUND2_DONE_REJECT_DELETE"}
+        self.assertFalse(dropped & core_state.STAGES)
+        self.assertFalse(dropped & set(core_state.STAGE_LABELS.keys()))
 
     def test_ensure_stage_transition_ok(self):
-        import core_state
+        from lib import core_state
         cand = {"talent_id": "t_test", "stage": "NEW", "audit": []}
         ok = core_state.ensure_stage_transition(cand, {"NEW"}, "EXAM_SENT")
         self.assertTrue(ok)
         self.assertEqual(cand["stage"], "EXAM_SENT")
 
     def test_ensure_stage_transition_wrong_stage(self):
-        import core_state
+        from lib import core_state
         cand = {"talent_id": "t_test", "stage": "EXAM_SENT", "audit": []}
         ok = core_state.ensure_stage_transition(cand, {"NEW"}, "ROUND2_SCHEDULED")
         self.assertFalse(ok)
         self.assertEqual(cand["stage"], "EXAM_SENT")
 
     def test_no_round1_score_field(self):
-        import core_state
+        from lib import core_state
         self.assertNotIn("round1_score", str(dir(core_state)))
 
     def test_append_audit_keeps_microsecond_precision(self):
-        import core_state
+        from lib import core_state
 
         cand = {"talent_id": "t_test", "stage": "NEW", "audit": []}
         core_state.append_audit(cand, "system", "first")
@@ -84,6 +93,68 @@ class TestCoreState(unittest.TestCase):
         self.assertEqual(same_event_id, legacy_entry["event_id"])
 
 
+class TestEmailWatch(unittest.TestCase):
+    """SMTP 投递 watcher：失败必须回告警 + 写 audit 事件。"""
+
+    def _fake_send_script(self, exit_code, stderr_msg=""):
+        """在 /tmp 写一个 mock email_send.py，按指定 exit code 退出。"""
+        import tempfile, textwrap
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", prefix="fake_email_send_",
+            delete=False,
+        )
+        f.write(textwrap.dedent("""\
+            import sys
+            sys.stderr.write({stderr!r})
+            sys.exit({rc})
+        """).format(rc=exit_code, stderr=stderr_msg))
+        f.close()
+        return f.name
+
+    def test_watcher_success_no_feishu_no_failure_event(self):
+        from lib import email_watch
+        script = self._fake_send_script(0)
+        notify_calls, audit_calls = [], []
+        with mock.patch.object(email_watch, "_resolve_email_send_script", return_value=script), \
+             mock.patch.object(email_watch, "_notify_boss_failure", side_effect=lambda *a, **k: notify_calls.append(a)), \
+             mock.patch.object(email_watch, "_record_failure_event", side_effect=lambda *a, **k: audit_calls.append(a)):
+            rc = email_watch.main([
+                "--to", "ok@example.com", "--subject", "S", "--body", "B",
+                "--tag", "test_ok", "--talent-id", "t_demo",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(notify_calls, [], "成功路径不应触发飞书告警")
+        self.assertEqual(audit_calls, [], "成功路径不应写 failure 事件")
+
+    def test_watcher_failure_triggers_feishu_and_audit(self):
+        from lib import email_watch
+        script = self._fake_send_script(1, stderr_msg="❌ Failed to send email: bad recipient")
+        notify_calls, audit_calls = [], []
+
+        def _capture_notify(*a, **k):
+            notify_calls.append(a)
+
+        def _capture_audit(*a, **k):
+            audit_calls.append(a)
+
+        with mock.patch.object(email_watch, "_resolve_email_send_script", return_value=script), \
+             mock.patch.object(email_watch, "_notify_boss_failure", side_effect=_capture_notify), \
+             mock.patch.object(email_watch, "_record_failure_event", side_effect=_capture_audit):
+            rc = email_watch.main([
+                "--to", "bad@example.com", "--subject", "S", "--body", "B",
+                "--tag", "test_fail", "--talent-id", "t_demo",
+                "--candidate-name", "测试人",
+            ])
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(notify_calls), 1, "失败必须触发一次飞书告警")
+        self.assertEqual(len(audit_calls), 1, "失败必须写一次 talent_events email_smtp_failed 事件")
+        # talent_id, to, subject, tag, exit_code, log_path
+        a = audit_calls[0]
+        self.assertEqual(a[0], "t_demo")
+        self.assertEqual(a[1], "bad@example.com")
+        self.assertEqual(a[4], 1)
+
+
 class TestDbFallback(unittest.TestCase):
 
     def setUp(self):
@@ -92,28 +163,28 @@ class TestDbFallback(unittest.TestCase):
     def test_save_state_raises_when_db_fails(self):
         """DB 已配置但写入失败时，异常应向上抛出，不静默吞掉。"""
         import types as _types
-        import core_state
+        from lib import core_state
 
         fake_tdb = _types.SimpleNamespace()
         fake_tdb._is_enabled = lambda: True
         fake_tdb.sync_state_to_db = mock.Mock(side_effect=RuntimeError("db down"))
 
         state = {"candidates": {"t_demo": {"talent_id": "t_demo", "stage": "NEW", "audit": []}}}
-        with mock.patch.dict(__import__("sys").modules, {"talent_db": fake_tdb}):
+        with patch_module("talent_db", fake_tdb):
             with self.assertRaises(RuntimeError):
                 core_state.save_state(state)
 
     def test_load_state_returns_db_result_directly(self):
         """DB 已配置时直接返回 DB 数据，不做任何 JSON 兜底。"""
         import types as _types
-        import core_state
+        from lib import core_state
 
         fake_tdb = _types.SimpleNamespace()
         fake_tdb._is_enabled = lambda: True
         fake_tdb.load_state_from_db = mock.Mock(return_value={
             "candidates": {"t_demo": {"talent_id": "t_demo", "stage": "EXAM_REVIEWED", "audit": []}}
         })
-        with mock.patch.dict(__import__("sys").modules, {"talent_db": fake_tdb}):
+        with patch_module("talent_db", fake_tdb):
             state = core_state.load_state()
 
         self.assertIn("t_demo", state["candidates"])
@@ -123,14 +194,14 @@ class TestDbFallback(unittest.TestCase):
         """导入候选人时 DB 已配置，应同步并显示已同步。"""
         out, err, rc = call_main("cmd_import_candidate", [
             "--template",
-            "【导入候选人】\n姓名：测试候选人\n邮箱：candidate@example.com\n当前阶段：待安排二面"
+            "【导入候选人】\n姓名：候选人K\n邮箱：candidate-k@example.com\n当前阶段：待安排二面"
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("已同步", out)
 
     def test_import_candidate_supports_wait_return_stage(self):
         """补录 WAIT_RETURN 候选人时，应同步 wait_return_round。"""
-        from core_state import load_state
+        from lib.core_state import load_state
 
         out, err, rc = call_main("cmd_import_candidate", [
             "--template",
@@ -166,11 +237,11 @@ class TestDbFallback(unittest.TestCase):
 class TestFeishu(unittest.TestCase):
 
     def test_import_feishu(self):
-        import feishu
+        from lib import feishu
         self.assertTrue(hasattr(feishu, "send_text"))
 
     def test_send_text_no_client_returns_false(self):
-        import feishu
+        from lib import feishu
         with mock.patch.object(feishu, "_get_client", return_value=None), \
              mock.patch.object(feishu, "side_effects_disabled", return_value=False):
             result = feishu.send_text("hello world test")

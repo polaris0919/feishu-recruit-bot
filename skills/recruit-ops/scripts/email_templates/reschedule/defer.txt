@@ -1,0 +1,8 @@
+SUBJECT: 【面试安排更新】${round_label}面试暂缓，待回国后再约 - $company
+
+您好，$candidate_name，
+
+感谢您的回复。了解到您目前暂时不在上海，我们这边先不安排本次${round_label}面试。
+等您之后方便回到上海时，可以再与我们联系，我们再为您协调安排。
+
+$$include(footer)$$

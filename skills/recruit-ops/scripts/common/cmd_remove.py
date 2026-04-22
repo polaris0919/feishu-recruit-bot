@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from core_state import load_candidate
+from lib.core_state import load_candidate
 
 
 def main(argv=None):
@@ -31,7 +31,7 @@ def main(argv=None):
     stage = cand.get("stage", "NEW")
     email = cand.get("candidate_email") or "—"
 
-    import talent_db as _tdb
+    from lib import talent_db as _tdb
     if not _tdb._is_enabled():
         print(json.dumps({"ok": False, "error": "DB 未配置，无法执行删除"}, ensure_ascii=False))
         return 1

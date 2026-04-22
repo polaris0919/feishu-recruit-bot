@@ -16,7 +16,7 @@
 电话：13800000000（选填）
 岗位：量化研究实习生（选填）
 学历：硕士（选填）
-院校：复旦大学（选填）
+院校：示例大学（选填）
 来源：猎头（选填）
 当前阶段：笔试中（必填，见下方说明）
 一面时间：2026-03-15 14:00（一面邀请中/已确认时必填）
@@ -39,7 +39,7 @@ import string
 import sys
 from datetime import datetime
 
-from core_state import load_state, save_candidate
+from lib.core_state import load_state, save_candidate
 
 # ─── 阶段映射 ───────────────────────────────────────────────────────────────────
 
@@ -50,8 +50,9 @@ _STAGE_MAP = [
     ("一面邀请中",        "ROUND1_SCHEDULING",  None,                  None),
     ("一面确认中",        "ROUND1_SCHEDULING",  None,                  None),
     ("一面已确认",        "ROUND1_SCHEDULED",   None,                  None),
-    ("一面完成",          "ROUND1_DONE_PASS",   None,                  None),
-    ("一面通过",          "ROUND1_DONE_PASS",   None,                  None),
+    # 一面通过/完成 → 直接当成"已发笔试"导入（系统不再保留独立的 ROUND1_DONE_PASS 中间态）
+    ("一面完成",          "EXAM_SENT",          None,                  None),
+    ("一面通过",          "EXAM_SENT",          None,                  None),
     ("笔试中",            "EXAM_SENT",          None,                  None),
     ("已发笔试",          "EXAM_SENT",          None,                  None),
     ("笔试完成",          "EXAM_REVIEWED",      None,                  None),
@@ -60,7 +61,8 @@ _STAGE_MAP = [
     ("二面邀请中",        "ROUND2_SCHEDULING",  "PENDING",             None),
     ("二面确认中",        "ROUND2_SCHEDULING",  "PENDING",             None),
     ("二面已确认",        "ROUND2_SCHEDULED",   "CONFIRMED",           None),
-    ("二面完成",          "ROUND2_DONE_PENDING", None,                 None),
+    # 二面完成（结果未定）→ 仍当成"二面已确认"，由老板再决定 pass/reject
+    ("二面完成",          "ROUND2_SCHEDULED",   "CONFIRMED",           None),
     ("待回国后一面",      "WAIT_RETURN",        None,                  1),
     ("回国后一面再约",    "WAIT_RETURN",        None,                  1),
     ("待回国后二面",      "WAIT_RETURN",        None,                  2),
@@ -71,25 +73,22 @@ _STAGE_MAP = [
 _REQUIRES_ROUND1_TIME = {"ROUND1_SCHEDULING", "ROUND1_SCHEDULED"}
 
 # 二面时间：强制必填的阶段
-_REQUIRES_ROUND2_TIME = {"ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"}
+_REQUIRES_ROUND2_TIME = {"ROUND2_SCHEDULING", "ROUND2_SCHEDULED"}
 
 # 自动生成 exam_id 的阶段
 _NEEDS_EXAM_ID = {"EXAM_SENT", "EXAM_REVIEWED",
-                  "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING",
-                  "ROUND2_DONE_PASS"}
+                  "ROUND2_SCHEDULING", "ROUND2_SCHEDULED"}
 
 # 下一步操作提示
 _NEXT_STEP = {
     "NEW":                 "请安排一面时间，对我说：\n  安排 {name} 一面，时间是 YYYY-MM-DD HH:MM",
     "ROUND1_SCHEDULING":   "一面邀请已发出，系统自动扫描候选人回信，确认后会创建日历。",
-    "ROUND1_SCHEDULED":    "一面已确认，等待面试完成。面试后告知我：\n  {name} 一面通过",
-    "ROUND1_DONE_PASS":    "一面已通过，可发笔试。对我说：\n  给 {name} 发笔试",
+    "ROUND1_SCHEDULED":    "一面已确认，等待面试完成。面试后告知我：\n  {name} 一面通过 (会直接发笔试)",
     "EXAM_SENT":           "笔试已发送，系统自动扫描邮件，提交后会推送预审报告。",
     "EXAM_REVIEWED":       "笔试已完成，可安排二面。对我说：\n  安排 {name} 二面，时间是 YYYY-MM-DD HH:MM",
     "WAIT_RETURN":         "候选人暂缓推进，待回国后再恢复到对应轮次继续安排。",
     "ROUND2_SCHEDULING":   "二面邀请已发出，系统自动扫描候选人回信，确认后会创建日历。",
-    "ROUND2_SCHEDULED":    "二面已确认，等待面试完成。面试后告知我：\n  {name} 二面通过",
-    "ROUND2_DONE_PENDING": "二面已完成，请告知结果：\n  {name} 二面通过 / {name} 二面不通过",
+    "ROUND2_SCHEDULED":    "二面已确认/已完成，等老板决定结果：\n  {name} 二面通过 / {name} 二面不通过",
 }
 
 
@@ -253,8 +252,8 @@ def main(argv=None):
     round1_invite_sent_at = None
     round2_invite_sent_at = None
 
-    if stage in ("ROUND1_SCHEDULED", "ROUND1_DONE_PASS", "EXAM_SENT", "EXAM_REVIEWED",
-                 "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"):
+    if stage in ("ROUND1_SCHEDULED", "EXAM_SENT", "EXAM_REVIEWED",
+                 "ROUND2_SCHEDULING", "ROUND2_SCHEDULED"):
         round1_status = "CONFIRMED" if round1_time else round1_status
     if stage == "ROUND1_SCHEDULING" and round1_time:
         round1_invite_sent_at = imported_now
@@ -267,7 +266,7 @@ def main(argv=None):
     if stage == "ROUND2_SCHEDULING" and round2_time:
         round2_status = "PENDING"
         round2_invite_sent_at = imported_now
-    elif stage in ("ROUND2_SCHEDULED", "ROUND2_DONE_PENDING"):
+    elif stage == "ROUND2_SCHEDULED":
         round2_status = "CONFIRMED" if round2_time else round2_status
         round2_invite_sent_at = imported_now if round2_time else None
 
@@ -299,7 +298,7 @@ def main(argv=None):
     save_candidate(talent_id, cand)
 
     # ── 输出结果 ───────────────────────────────────────────────────────────────
-    import talent_db as _tdb
+    from lib import talent_db as _tdb
     db_ok = _tdb._is_enabled()
     hint = _NEXT_STEP.get(stage, "候选人已导入，请根据实际情况推进流程。").format(name=name)
 
@@ -335,7 +334,7 @@ def main(argv=None):
 
     # ── 飞书通知老板 ────────────────────────────────────────────────────────────
     try:
-        import feishu as _fn
+        from lib import feishu as _fn
         edu_str = " ".join(filter(None, [education, school]))
         summary_lines = []
         if position:

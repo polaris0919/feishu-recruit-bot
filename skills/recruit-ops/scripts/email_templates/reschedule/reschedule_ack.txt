@@ -1,0 +1,8 @@
+SUBJECT: Re: 【面试通知】${round_label}面试时间确认 - $company
+
+您好，$candidate_name，
+
+收到您的改期申请，我们会尽快与您协调新的${round_label}面试时间安排。
+如有任何问题，请随时回复本邮件。
+
+$$include(footer)$$

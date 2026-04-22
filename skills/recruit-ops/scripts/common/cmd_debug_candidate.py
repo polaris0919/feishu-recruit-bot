@@ -14,7 +14,7 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-import config as _cfg
+from lib import config as _cfg
 
 
 _TALENT_SQL = """
@@ -29,17 +29,14 @@ SELECT
   round1_time,
   round1_invite_sent_at,
   round1_calendar_event_id,
-  round1_last_email_id,
   round1_reminded_at,
   round1_confirm_prompted_at,
   round2_confirm_status,
   round2_time,
   round2_invite_sent_at,
   round2_calendar_event_id,
-  round2_last_email_id,
   round2_reminded_at,
   round2_confirm_prompted_at,
-  exam_last_email_id,
   exam_sent_at,
   source,
   position,

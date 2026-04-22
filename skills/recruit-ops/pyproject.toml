@@ -15,31 +15,28 @@ dependencies = [
 
 [tool.setuptools]
 packages = [
+    "auto_reject",
     "common",
+    "cron",
+    "email_templates",
     "exam",
+    "followup",
+    "inbox",
     "intake",
     "interview",
     "lib",
     "lib.feishu",
+    "ops",
+    "outbound",
     "round1",
     "round2",
+    "talent",
+    "template",
     "tests",
 ]
 py-modules = [
-    "bg_helpers",
-    "cmd_exam_result",
-    "cmd_ingest_cv",
-    "cmd_reschedule_request",
-    "cmd_round1_defer",
-    "cmd_round2_defer",
-    "config",
-    "core_state",
-    "daily_exam_review",
-    "exam_prereview",
-    "feishu",
-    "recruit_paths",
-    "side_effect_guard",
-    "talent_db",
+    "cron_health",
+    "trigger_cron_now",
 ]
 
 [tool.setuptools.package-dir]

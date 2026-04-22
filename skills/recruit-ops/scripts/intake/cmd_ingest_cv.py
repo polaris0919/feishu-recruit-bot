@@ -22,7 +22,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from intake import cmd_parse_cv as _parse_mod
-from core_state import load_state
+from lib.core_state import load_state
 
 _FIELD_LABELS = {
     "candidate_name":  "姓名",
@@ -35,6 +35,7 @@ _FIELD_LABELS = {
     "work_years":      "工作年限",
     "source":          "来源渠道",
     "experience":      "简历摘要",
+    "has_cpp":         "是否会 C++",
 }
 
 _LLM_TO_DB = {
@@ -48,7 +49,17 @@ _LLM_TO_DB = {
     "work_years":     "work_years",
     "source":         "source",
     "resume_summary": "experience",
+    "has_cpp":        "has_cpp",
 }
+
+
+def _fmt_has_cpp(v):
+    """v3.5.7: has_cpp 是 true/false/null 三态，专用展示函数。"""
+    if v is True:
+        return "是"
+    if v is False:
+        return "否"
+    return ""
 
 
 def _detect_file_type(file_path, filename):
@@ -99,7 +110,7 @@ def _lookup_existing(name, email):
     返回完整候选人 dict，或 None（未找到），或 {"_multi": [...]}（多个匹配）。
     """
     try:
-        import talent_db as _tdb
+        from lib import talent_db as _tdb
         if _tdb._is_enabled():
             import psycopg2
 
@@ -109,7 +120,8 @@ def _lookup_existing(name, email):
                 if email:
                     cur.execute(
                         "SELECT talent_id, candidate_name, candidate_email, phone, wechat, "
-                        "position, education, school, work_years, source, experience, cv_path "
+                        "position, education, school, work_years, source, experience, cv_path, "
+                        "has_cpp "
                         "FROM talents WHERE candidate_email ILIKE %s",
                         (email,)
                     )
@@ -117,7 +129,8 @@ def _lookup_existing(name, email):
                 if not rows and name:
                     cur.execute(
                         "SELECT talent_id, candidate_name, candidate_email, phone, wechat, "
-                        "position, education, school, work_years, source, experience, cv_path "
+                        "position, education, school, work_years, source, experience, cv_path, "
+                        "has_cpp "
                         "FROM talents WHERE candidate_name ILIKE %s ORDER BY created_at DESC LIMIT 5",
                         ("%" + name + "%",)
                     )
@@ -145,6 +158,7 @@ def _lookup_existing(name, email):
                 "experience":      r[10] or "",
                 "source":          r[9] or "",
                 "cv_path":         r[11] or "",
+                "has_cpp":         r[12],  # 三态：True/False/None，不要 "" 兜底
             }
     except Exception as e:
         print("[cmd_ingest_cv] DB 查询失败，回退 JSON 状态: {}".format(e), file=sys.stderr)
@@ -170,16 +184,21 @@ def _lookup_existing(name, email):
             "cv_path": cand.get("cv_path") or "",
         }
 
+    def _to_record_full(c):
+        rec = _to_record(c)
+        rec["has_cpp"] = c.get("has_cpp")  # 三态保留
+        return rec
+
     matches = []
     if email:
         matches = [
-            _to_record(c) for c in candidates
+            _to_record_full(c) for c in candidates
             if (c.get("candidate_email") or "").strip().lower() == email
         ]
     if not matches and name:
         needle = name.lower()
         matches = [
-            _to_record(c) for c in candidates
+            _to_record_full(c) for c in candidates
             if needle in (c.get("candidate_name") or "").strip().lower()
         ][:5]
 
@@ -216,23 +235,33 @@ def _preview_existing(cand, fields, file_path):
         ("work_years",     "work_years",      "工作年限"),
         ("source",         "source",          "来源渠道"),
         ("resume_summary", "experience",      "简历摘要"),
+        ("has_cpp",        "has_cpp",         "是否会 C++"),
     ]
 
     changed_cols = {}   # db_col -> new_val（有差异且 LLM 有值的字段）
     table_lines = []
     for llm_key, db_col, label in _ORDERED:
         new_val = fields.get(llm_key)
-        new_str = str(new_val).strip() if new_val is not None else ""
         old_val = cand.get(db_col)
-        old_str = str(old_val).strip() if old_val is not None else ""
+        # has_cpp 是 bool 三态，不能走通用字符串对比，否则 False 会被吞
+        if llm_key == "has_cpp":
+            new_str = _fmt_has_cpp(new_val)
+            old_str = _fmt_has_cpp(old_val)
+            new_known = new_val is not None
+            old_known = old_val is not None
+        else:
+            new_str = str(new_val).strip() if new_val is not None else ""
+            old_str = str(old_val).strip() if old_val is not None else ""
+            new_known = new_str != ""
+            old_known = old_str != ""
 
-        if new_str == "" and old_str == "":
+        if not new_known and not old_known:
             marker = "  "
             disp = "（未识别 / 原为空）"
-        elif new_str == "":
+        elif not new_known:
             marker = "  "
             disp = "（未识别） / 现有：{}".format(old_str)
-        elif old_str == "":
+        elif not old_known:
             marker = "🆕"
             disp = "{} / 原为空".format(new_str)
             changed_cols[db_col] = new_val
@@ -289,7 +318,17 @@ def _preview_existing(cand, fields, file_path):
         '--confirm',
     ]
     for col, new_val in changed_cols.items():
-        cmd_update.append('--field "{}={}"'.format(col, str(new_val).replace('"', '\\"')))
+        # has_cpp 是 True/False/None，要序列化成 cmd_attach_cv 能识别的字面量
+        if col == "has_cpp":
+            if new_val is True:
+                ser = "true"
+            elif new_val is False:
+                ser = "false"
+            else:
+                ser = "null"
+        else:
+            ser = str(new_val).replace('"', '\\"')
+        cmd_update.append('--field "{}={}"'.format(col, ser))
 
     # 构建「仅存档」命令
     cmd_archive = [
@@ -348,6 +387,11 @@ def _preview_new(fields, file_path):
         "{} ⑧ 工作年限：{}".format(v_flag("work_years"), v("work_years")),
         "{} ⑨ 来源渠道：{}".format(v_flag("source"), v("source")),
         "{} ⑩ 简历摘要：{}".format(v_flag("resume_summary"), v("resume_summary")),
+        "{} ⑪ 是否会 C++：{}".format(
+            "✅" if fields.get("has_cpp") is not None else "⚠️",
+            "是" if fields.get("has_cpp") is True else
+            "否" if fields.get("has_cpp") is False else
+            "（未判断，请 HR 确认；不写则默认未知）"),
         "━━━━━━━━━━━━━━━━━━━━",
         "",
         "✅ = 已识别  ⚠️ = 未识别（需手动填写）",
@@ -384,6 +428,11 @@ def _preview_new(fields, file_path):
         cmd_args.append('--source "{}"'.format(_esc(fields["source"])))
     if fields.get("resume_summary"):
         cmd_args.append('--resume-summary "{}"'.format(_esc(fields["resume_summary"])))
+    # v3.5.7：has_cpp 透传给 cmd_new_candidate（true/false/null 三态字符串）
+    if fields.get("has_cpp") is True:
+        cmd_args.append('--has-cpp true')
+    elif fields.get("has_cpp") is False:
+        cmd_args.append('--has-cpp false')
     if file_path:
         cmd_args.append('--cv-path "{}"'.format(_esc(file_path)))
     cmd_args.append('--feishu-notify')
@@ -453,7 +502,7 @@ def main(argv=None):
         ).format(size_mb, filename or os.path.basename(local_path or ""))
         print("ERROR: PDF 文件过大（{:.1f} MB），请压缩后重新上传。".format(size_mb))
         try:
-            import feishu
+            from lib import feishu
             feishu.send_text_to_hr(msg)
         except Exception:
             pass

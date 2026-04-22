@@ -1,0 +1,22 @@
+SUBJECT: 【面试邀请】$company - 一面邀请$position_suffix
+
+您好，$candidate_name，
+
+感谢您对 $company 的关注！我们已通过简历筛选，诚邀您参加一面。
+
+$$include(intern_requirements)$$
+
+━━━━━━━━━━━━━━━━━━━━
+🗓 一面详情
+━━━━━━━━━━━━━━━━━━━━
+· 面试时间：$round1_time
+· 面试形式：线下面试
+· 面试地点：$location
+
+$$include(process_overview)$$
+
+请您确认是否可以按时参加。如有时间冲突，请提前回复本邮件告知，我们会及时为您调整。
+
+期待与您的交流！
+
+$$include(footer)$$

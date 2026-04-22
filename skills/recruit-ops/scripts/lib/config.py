@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from recruit_paths import config_candidates, first_existing
+from lib.recruit_paths import config_candidates, first_existing
 
 _cache = {}  # type: Dict[str, Any]
 
@@ -59,6 +59,19 @@ def _ensure_loaded():
     feishu_hr_open_id = os.environ.get("FEISHU_HR_OPEN_ID", "").strip()
     feishu_calendar_id = os.environ.get("FEISHU_CALENDAR_ID", "").strip()
 
+    # v3.5.7: 三位一面面试官的飞书 open_id（master=硕士面试官，
+    # bachelor=本科面试官，cpp=C++ 面试官）。
+    # 用法：intake.cmd_route_interviewer 根据 talents.{education,has_cpp}
+    # 在三者之间路由（cpp_first 优先级，详见 AGENT_RULES §5.11）。
+    # 配置缺失时 cmd_route_interviewer 直接报 config_error，由 chain
+    # 转 ASK_HR 分支推飞书；不会 fallback 到 boss/任意人，避免漏邀请。
+    feishu_interviewer_master_open_id = os.environ.get(
+        "FEISHU_INTERVIEWER_MASTER_OPEN_ID", "").strip()
+    feishu_interviewer_bachelor_open_id = os.environ.get(
+        "FEISHU_INTERVIEWER_BACHELOR_OPEN_ID", "").strip()
+    feishu_interviewer_cpp_open_id = os.environ.get(
+        "FEISHU_INTERVIEWER_CPP_OPEN_ID", "").strip()
+
     try:
         acct = openclaw["channels"]["feishu"]["accounts"]["feishubot"]
     except (KeyError, TypeError):
@@ -69,6 +82,36 @@ def _ensure_loaded():
     feishu_boss_open_id = feishu_boss_open_id or acct.get("ownerOpenId", "") or acct.get("bossOpenId", "")
     feishu_hr_open_id = feishu_hr_open_id or acct.get("hrOpenId", "")
     feishu_calendar_id = feishu_calendar_id or acct.get("calendarId", "")
+    feishu_interviewer_master_open_id = (
+        feishu_interviewer_master_open_id
+        or acct.get("interviewerMasterOpenId", "")
+    )
+    feishu_interviewer_bachelor_open_id = (
+        feishu_interviewer_bachelor_open_id
+        or acct.get("interviewerBachelorOpenId", "")
+    )
+    feishu_interviewer_cpp_open_id = (
+        feishu_interviewer_cpp_open_id
+        or acct.get("interviewerCppOpenId", "")
+    )
+
+    # v3.5.7 占位符：当没有任何来源（env/openclaw config）配齐时，
+    # 写入显眼的占位字符串。lib.feishu / cmd_route_interviewer 看到
+    # 以 "ou_PLACEHOLDER_" 开头的 open_id 时会拒绝真实推送（fail closed），
+    # 避免在配齐之前误发到真人账号。
+    _PLACEHOLDER_PREFIX = "ou_PLACEHOLDER_"
+    feishu_interviewer_master_open_id = (
+        feishu_interviewer_master_open_id
+        or _PLACEHOLDER_PREFIX + "INTERVIEWER_MASTER"
+    )
+    feishu_interviewer_bachelor_open_id = (
+        feishu_interviewer_bachelor_open_id
+        or _PLACEHOLDER_PREFIX + "INTERVIEWER_BACHELOR"
+    )
+    feishu_interviewer_cpp_open_id = (
+        feishu_interviewer_cpp_open_id
+        or _PLACEHOLDER_PREFIX + "INTERVIEWER_CPP"
+    )
 
     _cache["feishu"] = {
         "app_id": feishu_app_id,
@@ -78,6 +121,10 @@ def _ensure_loaded():
         "boss_open_id": feishu_boss_open_id,
         "hr_open_id": feishu_hr_open_id,
         "calendar_id": feishu_calendar_id,
+        # v3.5.7：三位一面面试官（详见 AGENT_RULES §5.11）。
+        "interviewer_master_open_id":   feishu_interviewer_master_open_id,
+        "interviewer_bachelor_open_id": feishu_interviewer_bachelor_open_id,
+        "interviewer_cpp_open_id":      feishu_interviewer_cpp_open_id,
     }
 
     # --- DashScope LLM ---

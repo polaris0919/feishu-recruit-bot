@@ -25,8 +25,8 @@ except ImportError:
     _urllib_req = None
     _urllib_err = None
 
-import config as _cfg
-from core_state import get_tdb
+from lib import config as _cfg
+from lib.core_state import get_tdb
 
 FEISHU_API = "https://open.feishu.cn/open-apis"
 
@@ -182,7 +182,7 @@ def _find_candidate(talent_id=None, name=None):
             print("[cmd_send_cv] DB 查询失败，回退到 state 文件: {}".format(e), file=sys.stderr)
 
     # 回退：从 JSON state 文件查找
-    from core_state import load_state
+    from lib.core_state import load_state
     state = load_state()
     candidates = state.get("candidates", {})
     if talent_id:

@@ -6,11 +6,14 @@ import json
 import sys
 from typing import Any, Dict, List
 
-from core_state import STAGE_LABELS, load_state
+from lib.core_state import STAGE_LABELS, load_state
 
+# v3.6 (2026-04-27)：OFFER_HANDOFF 合并入 POST_OFFER_FOLLOWUP。
+# POST_OFFER_FOLLOWUP 视为 active——此阶段仍有邮件流（HR 发 offer、谈入职日 / 薪资），
+# 直到老板手动 cmd_delete / cmd_update --stage WAIT_RETURN 之类才算"离场"。
 ACTIVE_STAGES = {
     "NEW", "ROUND1_SCHEDULING", "ROUND1_SCHEDULED", "EXAM_SENT", "EXAM_REVIEWED",
-    "WAIT_RETURN", "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "ROUND2_DONE_PENDING", "OFFER_HANDOFF",
+    "WAIT_RETURN", "ROUND2_SCHEDULING", "ROUND2_SCHEDULED", "POST_OFFER_FOLLOWUP",
 }
 
 

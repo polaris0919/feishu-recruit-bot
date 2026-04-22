@@ -24,7 +24,7 @@ import sys
 import urllib.request
 import urllib.error
 
-from recruit_paths import config_candidates, first_existing
+from lib.recruit_paths import config_candidates, first_existing
 
 FEISHU_API = "https://open.feishu.cn/open-apis"
 OPENCLAW_CONFIG = first_existing(config_candidates("openclaw.json"))
@@ -241,7 +241,7 @@ def _llm_parse_cv_fields(cv_text, filename="", pdf_title="", pdf_author=""):
     # type: (str, str, str, str) -> dict
     """
     调用 DashScope LLM，从中文简历文本中提取候选人关键字段，返回字段字典。
-    filename: 飞书文件名（如"张三_复旦大学_简历.pdf"）
+    filename: 飞书文件名（如"张三_示例大学_简历.pdf"）
     pdf_title: PDF 文档属性中的 Title 字段
     pdf_author: PDF 文档属性中的 Author 字段
     """
@@ -282,6 +282,11 @@ def _llm_parse_cv_fields(cv_text, filename="", pdf_title="", pdf_author=""):
         "- work_years: 工作年限，整数，应届生或实习生填 0（整数）\n"
         "- source: 来源渠道，若简历未提及则填 null（字符串）\n"
         "- resume_summary: 100字以内的候选人背景摘要，包含核心技能、项目经历和亮点（字符串）\n"
+        "- has_cpp: 候选人是否会 C++（true / false / null）。判断依据：\n"
+        "    true  = 简历的「技能/掌握语言/项目经历」里明确写了 C++（或 cpp、C++11/14/17/20）；\n"
+        "    false = 简历明确列出了编程语言但**没有** C++（例如只有 Python/Java/Go）；\n"
+        "    null  = 简历没列任何编程语言、或只字未提技能栈，无法判断。\n"
+        "    注意：「C」语言不算 C++；「C/C++」算 C++。宁可填 null 也不要瞎猜。\n"
         "{extra}"
         "\n简历文本：\n"
         "```\n{text}\n```\n\n"
@@ -345,6 +350,10 @@ def _format_preview(fields, pdf_path=None):
         "学历：{}".format(v("education", "")),
         "毕业院校：{}".format(v("school", "")),
         "工作年限：{}".format(v("work_years", "")),
+        "是否会 C++：{}".format(
+            "是" if fields.get("has_cpp") is True else
+            "否" if fields.get("has_cpp") is False else
+            "（未判断）"),
         "来源渠道：{}".format(v("source", "")),
         "简历摘要：{}".format(v("resume_summary", "")),
         "━━━━━━━━━━━━━━━━━━━━",
@@ -377,6 +386,11 @@ def _format_preview(fields, pdf_path=None):
     if fields.get("resume_summary"):
         cmd_args.append("--resume-summary \"{}\"".format(
             fields["resume_summary"].replace('"', '\\"')))
+    # v3.5.7：has_cpp 透传到 cmd_new_candidate（true/false/null 三态）
+    if fields.get("has_cpp") is True:
+        cmd_args.append("--has-cpp true")
+    elif fields.get("has_cpp") is False:
+        cmd_args.append("--has-cpp false")
     if pdf_path:
         cmd_args.append("--cv-path \"{}\"".format(pdf_path.replace('"', '\\"')))
 

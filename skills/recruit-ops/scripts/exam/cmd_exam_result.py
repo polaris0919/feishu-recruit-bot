@@ -3,16 +3,17 @@
 """
 处理 /exam_result 命令：
   - result=pass        → 状态推进到 ROUND2_SCHEDULING，自动给候选人发二面通知邮件
-  - result=reject_keep → 状态推进到 ROUND1_DONE_REJECT_KEEP（保留人才库）
-  - result=reject_delete → 状态推进到 ROUND1_DONE_REJECT_DELETE（移除）
+  - result=reject_keep → 状态推进到 EXAM_REJECT_KEEP（笔试未通过，保留人才库）
+  - result=reject_delete → 直接 talent_db.delete_talent()（物理删除，不再经停 stage）
+    v3.6 (2026-04-28)：ROUND1_DONE_REJECT_DELETE 这个"占位 stage"已下线。
 """
 import argparse
 import sys
 from datetime import datetime
 from typing import List, Optional
-from bg_helpers import send_bg_email
+from lib.bg_helpers import send_bg_email
 
-from core_state import (
+from lib.core_state import (
     append_audit,
     ensure_stage_transition,
     load_candidate,
@@ -28,45 +29,23 @@ def send_round2_notification(
     candidate_name="",
 ):
     # type: (str, str, str, str, str) -> int
-    """在独立 session 后台发送二面通知邮件，返回 PID。（统一线下面试）"""
-    company_display = company if company else "公司"
-    subject = "【面试通知】笔试通过，邀请参加第二轮面试 - " + company_display
+    """在独立 session 后台发送二面通知邮件，返回 PID。
 
-    time_line = round2_time if round2_time else "待定，HR 将另行通知"
-    location_lines = [
-        "· 面试形式：线下面试",
-        "· 面试地点：上海市浦东新区杨高中路丁香国际商业中心西塔21楼致邃投资",
-    ]
-
-    body_parts = [
-        "您好，{}，".format(candidate_name if candidate_name else ""),
-        "",
-        "感谢您认真完成笔试！经过评审，您已顺利通过本轮笔试，恭喜！",
-        "",
-        "我们诚邀您参加第二轮面试，详情如下：",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "🗓 面试详情",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "· 面试时间：" + time_line,
-    ]
-    body_parts.extend(location_lines)
-    body_parts.extend([
-        "━━━━━━━━━━━━━━━━━━━━",
-        "",
-        "请您确认是否可以按时参加。",
-        "如有时间冲突，请提前回复本邮件告知，我们会及时为您调整。",
-        "",
-        "再次感谢您对 {} 的关注，期待与您的进一步交流！".format(company_display),
-        "",
-        company_display + " 招聘团队",
-        "",
-        "---",
-        "TALENT_ID: " + talent_id,
-    ])
-    body = "\n".join(body_parts)
-
-    return send_bg_email(to_email, subject, body, tag="round2_invite")
+    候选人语言里这是"第三轮"——一面=第一轮、笔试=第二轮、二面=第三轮。
+    模板见 email_templates/round2_invite.txt。
+    """
+    from email_templates import renderer
+    from email_templates.constants import COMPANY, LOCATION
+    subject, body = renderer.render(
+        "round2_invite",
+        candidate_name=candidate_name or "您",
+        round2_time=round2_time or "待定，HR 将另行通知",
+        location=LOCATION,
+        company=company or COMPANY,
+        talent_id=talent_id,
+    )
+    return send_bg_email(to_email, subject, body, tag="round2_invite",
+                         talent_id=talent_id, candidate_name=candidate_name)
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -139,7 +118,7 @@ def main(argv=None):
                 to_email=candidate_email,
                 talent_id=talent_id,
                 round2_time=args.round2_time,
-                company="致邃投资",
+                company="示例科技公司",
                 candidate_name=cand.get("candidate_name", ""),
             )
         else:
@@ -172,7 +151,7 @@ def main(argv=None):
             lines.append("- 二面通知邮件: 发送中（后台 PID={}）".format(email_pid))
 
         save_candidate(talent_id, cand)
-        import talent_db as _tdb
+        from lib import talent_db as _tdb
         if _tdb._is_enabled():
             _tdb.clear_round_followup_fields(talent_id, 2)
 
@@ -187,7 +166,7 @@ def main(argv=None):
 
     elif result == "reject_keep":
         allowed_from = {"EXAM_SENT", "EXAM_REVIEWED"}
-        ok = ensure_stage_transition(cand, allowed_from, "ROUND1_DONE_REJECT_KEEP")
+        ok = ensure_stage_transition(cand, allowed_from, "EXAM_REJECT_KEEP")
         if not ok:
             print(
                 f"ERROR: 当前阶段 {current_stage} 不允许执行 exam_result=reject_keep。",
@@ -206,8 +185,9 @@ def main(argv=None):
         print(
             f"[笔试结果已记录]\n"
             f"- talent_id: {talent_id}\n"
-            f"- 结果: 未通过（保留人才库）"
+            f"- 结果: 笔试未通过（保留人才库）"
             f"{note_line}\n"
+            f"- 当前阶段: EXAM_REJECT_KEEP\n"
             f"- 候选人邮箱: {cand.get('candidate_email', '未记录')}\n"
             f"- 后续动作: 候选人已保留在人才库，可在未来合适职位时重新激活。"
         )
@@ -222,7 +202,7 @@ def main(argv=None):
             )
             return 1
 
-        import talent_db as _tdb
+        from lib import talent_db as _tdb
         if _tdb._is_enabled():
             try:
                 _tdb.delete_talent(talent_id)

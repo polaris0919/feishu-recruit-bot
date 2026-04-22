@@ -10,7 +10,7 @@ __pycache__/
 dist/
 build/
 
-# Accidental / editor noise
+# Editor / OS noise
 **/sfully*
 .idea/
 .vscode/
@@ -18,7 +18,11 @@ build/
 *~
 .DS_Store
 
-# Local runtime config / state
+# 编辑器 / 升级备份后缀
+*.bak.*
+*.bak
+
+# Local runtime config / state（占位 .example.json 显式入库）
 config/*.json
 state/*.json
 !config/*.example.json
@@ -28,10 +32,29 @@ state/*.json
 recruit_state.json
 talent-db-config.json
 
-# Runtime inbound CV attachments
+# Runtime inbound CV attachments（含真实简历，仅保留 .gitkeep 占位）
 data/media/inbound/
 !data/media/inbound/.gitkeep
 
-# Runtime exam artifacts
+# Runtime exam artifacts（笔试题压缩包；公开仓不带任何真实笔试材料）
 data/exam_txt/*.tar
 data/exam_txt/*.tar.gz
+
+# v3.5.6: inbox.cmd_scan 落盘的候选人邮件附件（简历/笔试代码/作品集等敏感内容）
+data/candidate_answer/
+
+# v3.5.8: 候选人统一资料目录（cv/exam_answer/email），含敏感简历 / 笔试代码
+data/candidates/
+
+# v3.5.12: cron heartbeat 文件（运行时心跳，不该入库）
+data/.cron_heartbeat
+
+# v3.5.10: systemd 旧 timer/service 备份（迁移到 recruit-cron-runner.timer 时存档；本地审计用，不入库）
+data/systemd_backup_*/
+
+# Runtime / historical artifacts
+data/followup_archive/
+data/followup_pending/
+data/standard_answer/
+data/deleted_archive/
+data/onoffer_data/

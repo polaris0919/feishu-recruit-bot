@@ -5,7 +5,7 @@ import argparse
 import sys
 from typing import List, Optional
 
-from core_state import STAGE_LABELS, load_state
+from lib.core_state import STAGE_LABELS, load_state
 
 ACTION_LABELS = {
     "round1_pass_and_exam_invite_sent": "一面通过，已发笔试邀请",
