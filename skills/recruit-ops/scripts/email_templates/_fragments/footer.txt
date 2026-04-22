@@ -1,0 +1,4 @@
+$company 招聘团队
+
+---
+TALENT_ID: $talent_id

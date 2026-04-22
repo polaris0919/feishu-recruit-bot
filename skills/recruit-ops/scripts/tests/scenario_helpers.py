@@ -9,10 +9,9 @@ import sys
 import types
 from email.mime.text import MIMEText
 from email.utils import format_datetime
-from unittest import mock
 
-from core_state import load_candidate
-from tests.helpers import call_main, mem_tdb, new_candidate, wipe_state
+from lib.core_state import load_candidate
+from tests.helpers import call_main, mem_tdb, new_candidate, patch_module, wipe_state
 
 
 def make_reply_email(from_addr, subject, body, message_id, sent_at=None):
@@ -105,24 +104,40 @@ class ScenarioRunner:
 
     def create_round1_pending_candidate(self, name="一面场景人", email="round1scenario@example.com",
                                         round1_time="2026-04-20 10:00"):
+        """v3.5: 直接用 talent.cmd_update 设置 ROUND1_SCHEDULING 状态，
+        替代旧 cmd_round1_schedule wrapper。"""
         tid = new_candidate(name=name, email=email)
-        call_main("cmd_round1_schedule", ["--talent-id", tid, "--time", round1_time])
+        call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_SCHEDULING",
+            "--set", "round1_time={}".format(round1_time),
+            "--set", "round1_invite_sent_at=__NOW__",
+            "--force",
+        ])
         return tid
 
     def create_confirmed_round2_candidate(self, name="已确认二面人", email="confirmed@example.com",
                                           round2_time="2026-04-20 14:00"):
+        """v3.5: interview.cmd_confirm wrapper 已删；直接 set ROUND2_SCHEDULED + CONFIRMED。"""
         tid = self.create_round2_pending_candidate(name=name, email=email, round2_time=round2_time)
-        import interview.cmd_confirm as cmd_confirm
-        with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=2468):
-            call_main("interview.cmd_confirm", ["--talent-id", tid, "--round", "2"])
+        call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--force",
+        ])
         return tid
 
     def create_confirmed_round1_candidate(self, name="已确认一面人", email="confirmed-r1@example.com",
                                           round1_time="2026-04-20 10:00"):
+        """v3.5: interview.cmd_confirm wrapper 已删；直接 set ROUND1_SCHEDULED + CONFIRMED。"""
         tid = self.create_round1_pending_candidate(name=name, email=email, round1_time=round1_time)
-        import interview.cmd_confirm as cmd_confirm
-        with mock.patch.object(cmd_confirm, "_spawn_calendar_bg", return_value=1357):
-            call_main("interview.cmd_confirm", ["--talent-id", tid, "--round", "1"])
+        call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_SCHEDULED",
+            "--set", "round1_confirm_status=CONFIRMED",
+            "--force",
+        ])
         return tid
 
     def set_invite_sent_at(self, talent_id, round_num, invite_sent_at):
@@ -146,18 +161,9 @@ class ScenarioRunner:
         actual = cand.get("{}_last_email_id".format(context))
         assert actual == email_id, (actual, email_id)
 
-    @contextlib.contextmanager
-    def patch_daily_exam_review(self, review_mod, llm_side_effect=None):
-        fake_feishu = types.SimpleNamespace(
-            send_text=lambda text: self.sent_reports.append(text) or True
-        )
-        with mock.patch.object(review_mod, "connect_imap", side_effect=self.mailbox.connect), \
-             mock.patch.dict(sys.modules, {"feishu": fake_feishu}):
-            if llm_side_effect is None:
-                yield
-            else:
-                with mock.patch.object(review_mod, "_llm_analyze_reply", side_effect=llm_side_effect):
-                    yield
+    # v3.5: patch_daily_exam_review 已删除（daily_exam_review 模块整个下架）。
+    # 如果剧本级 chain 测试需要 mock IMAP+LLM，请新建 patch_inbox_pipeline 或直接在
+    # tests/test_agent_chain.py 内部用 mock.patch 各 atomic CLI。
 
 
 def subprocess_result_from_call_main(cmd, *args, **kwargs):

@@ -1,13 +1,33 @@
 # 复杂协商回归清单
 
-> 适用场景：在你自己的本地或 staging 环境、当前 Feishu 配置和两组专用测试邮箱下，验证 `daily_exam_review.py` 的真实协商行为，而不是只验证单个命令能否跑通。
+> 适用场景：在当前本地真库、当前 Feishu 配置和两个固定测试邮箱下，验证候选人协商流程的真实行为，而不是只验证单个命令能否跑通。
 >
-> 执行约定：除非特别说明，下文所有 Python 命令都默认在仓库根目录 `<repo_root>/skills/recruit-ops` 执行，并使用 `uv run python3 scripts/...` 作为前缀。文中保留 `python3 exam/...`、`python3 common/...` 只是为了突出相对脚本路径。
+> 执行约定：除非特别说明，下文所有 Python 命令都默认在仓库根目录 `<RECRUIT_WORKSPACE>/skills/recruit-ops` 执行，并使用 `uv run python3 -m <module>` 作为前缀。
 >
 > 固定测试邮箱：
 >
-> - `candidate-a@example.com`
-> - `candidate-b@example.com`
+> - `fake-test@example.com`
+> - `candidate-k@example.com`
+
+---
+
+## v3.5 命令映射（先读这一节）
+
+v3.5 起 `exam/daily_exam_review.py`、`round1/cmd_round1_schedule.py`、
+`common/cmd_finalize_interview_time.py`、`interview/cmd_{confirm,defer,reschedule}.py`
+**全部下线**。本文中保留旧命令仅为突出"原本对应的扫描/动作分支"，实际执行请按下表替换。
+完整决策规则与 chain 范式见 [`docs/AGENT_RULES.md`](AGENT_RULES.md)。
+
+| 旧命令（本文中仍出现） | v3.5 等价做法 |
+|------------------------|---------------|
+| `python3 exam/daily_exam_review.py --interview-confirm-only` | `python3 -m inbox.cmd_scan && python3 -m inbox.cmd_analyze`（agent 看到 `confirm`/`reschedule`/`defer_until_return`/`request_online` intent 后按规则推下一步） |
+| `python3 exam/daily_exam_review.py --reschedule-scan-only` | 同上。已确认候选人收到 reschedule/defer/request_online 邮件时，由 agent 推飞书 + 视情况调 `feishu.cmd_calendar_delete` |
+| `python3 exam/daily_exam_review.py --exam-only` | 同上。笔试提交邮件由 `inbox.cmd_analyze` 走 `prompts/inbox_general.json` 识别为 `exam_submission`，agent 再调 `exam.cmd_exam_ai_review` |
+| `python3 round1/cmd_round1_schedule.py --talent-id T --time X` | `python3 -m outbound.cmd_send --talent-id T --template round1_invite --vars '{"round1_time":"X"}'` 然后 `python3 -m talent.cmd_update --talent-id T --stage ROUND1_SCHEDULING --set round1_time="X" --set round1_invite_sent_at=__NOW__ --set round1_confirm_status=PENDING` |
+| `python3 common/cmd_finalize_interview_time.py --talent-id T --round 1` | `python3 -m talent.cmd_update --talent-id T --stage ROUND1_SCHEDULED --set round1_confirm_status=CONFIRMED` 然后 `python3 -m feishu.cmd_calendar_create --talent-id T --round 1` |
+| `python3 common/cmd_finalize_interview_time.py --talent-id T --round 2` | 同上把 `round 1` 换成 `round 2`、stage 换成 `ROUND2_SCHEDULED` |
+| `interview/cmd_defer.py --round N` | `python3 -m talent.cmd_update --talent-id T --stage WAIT_RETURN --set wait_return_round=N --set roundN_time=__NULL__` |
+| `talent_events 中出现 exam_prereview` | v3.5 改为 `talent_emails.ai_payload` 中带 `intent=exam_submission` + `exam_review_summary`（由 `exam.cmd_exam_ai_review` 写入） |
 
 ---
 
@@ -59,24 +79,26 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 
 ### 最终确认不是扫描完成的
 
-真正的最终敲定时间，应该用：
+真正的最终敲定时间，v3.5 由老板手动触发 agent，agent 执行：
 
 ```bash
-python3 common/cmd_finalize_interview_time.py --talent-id <talent_id> --round 1
-python3 common/cmd_finalize_interview_time.py --talent-id <talent_id> --round 2
+# 时间不变：直接确认 + 创日历
+python3 -m talent.cmd_update --talent-id <talent_id> --stage ROUND1_SCHEDULED \
+  --set round1_confirm_status=CONFIRMED
+python3 -m feishu.cmd_calendar_create --talent-id <talent_id> --round 1
+
+# 时间改了：先改 round1_time，再确认 + 创日历
+python3 -m talent.cmd_update --talent-id <talent_id> --stage ROUND1_SCHEDULED \
+  --set round1_time="2026-05-12 10:00" --set round1_confirm_status=CONFIRMED
+python3 -m feishu.cmd_calendar_create --talent-id <talent_id> --round 1
 ```
 
-这个命令会：
-
-- 如果最终时间等于当前 pending 时间：走 `cmd_confirm`
-- 如果老板改成其他时间：走 `cmd_reschedule --confirmed`
-
-所以你想测的“协商 3 轮后才最终确认”，正确流程就是：
+所以你想测的"协商 3 轮后才最终确认"，正确流程就是：
 
 1. 候选人连续发 3 轮邮件
-2. 每轮之后跑扫描
+2. 每轮之后跑 `inbox.cmd_scan && inbox.cmd_analyze`
 3. 看状态始终保持 `SCHEDULING + PENDING`
-4. 最后由老板执行 `cmd_finalize_interview_time.py`
+4. 最后由老板触发 agent，按上面 chain 把 stage 推到 `ROUND1_SCHEDULED` + 创日历
 
 ---
 
@@ -85,14 +107,14 @@ python3 common/cmd_finalize_interview_time.py --talent-id <talent_id> --round 2
 ### 1. 人类可读状态
 
 ```bash
-cd <repo_root>/skills/recruit-ops/scripts
+cd <RECRUIT_WORKSPACE>/skills/recruit-ops/scripts
 python3 common/cmd_status.py --talent-id <talent_id> --audit-lines 30
 ```
 
 ### 2. 完整 DB 视图
 
 ```bash
-cd <repo_root>/skills/recruit-ops/scripts
+cd <RECRUIT_WORKSPACE>/skills/recruit-ops/scripts
 python3 common/cmd_debug_candidate.py --talent-id <talent_id> --event-limit 30
 ```
 
@@ -101,10 +123,18 @@ python3 common/cmd_debug_candidate.py --talent-id <talent_id> --event-limit 30
 ```bash
 psql "$DATABASE_URL" -c "
 SELECT talent_id, current_stage, round1_confirm_status, round2_confirm_status,
-       round1_time, round2_time, wait_return_round,
-       round1_last_email_id, round2_last_email_id, exam_last_email_id
+       round1_time, round2_time, wait_return_round
 FROM talents
 WHERE talent_id = '<talent_id>';
+"
+
+# v3.5.2 起 *_last_email_id 字段已 DROP，邮件证据改查 talent_emails：
+psql "$DATABASE_URL" -c "
+SELECT email_id, direction, context, status, ai_intent, sent_at, subject
+FROM talent_emails
+WHERE talent_id = '<talent_id>'
+ORDER BY sent_at DESC
+LIMIT 20;
 "
 ```
 
@@ -135,9 +165,9 @@ WHERE talent_id = '<talent_id>';
 
 ### 协商 / 邮件证据
 
-- `round1_last_email_id`
-- `round2_last_email_id`
-- `exam_last_email_id`
+- `talent_emails.email_id` / `message_id` / `in_reply_to`（v3.5.2 起这是邮件去重的 source-of-truth）
+- `talent_emails.context` ∈ {`exam`, `round1`, `round2`, `followup`, `intake`, `unknown`}
+- `talent_emails.status` ∈ {`received`, `pending_boss`, `replied`, `dismissed`, `snoozed`, `auto_processed`, `duplicate_skipped`, `error`}
 - `round1_confirm_prompted_at`
 - `round2_confirm_prompted_at`
 
@@ -170,7 +200,7 @@ WHERE talent_id = '<talent_id>';
 
 - `current_stage` 不回退
 - `roundN_confirm_status` 仍是 `CONFIRMED`
-- 只更新 `roundN_last_email_id`
+- `talent_emails` 增 1 行 inbound（v3.5.2：原 `roundN_last_email_id` 已 DROP）
 
 ---
 
@@ -180,15 +210,15 @@ WHERE talent_id = '<talent_id>';
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `candidate-a@example.com` |
-| 当前场景干扰候选人 | `candidate-b@example.com` |
+| 当前场景目标候选人 | `fake-test@example.com` |
+| 当前场景干扰候选人 | `candidate-k@example.com` |
 
 下一组交换角色：
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `candidate-b@example.com` |
-| 当前场景干扰候选人 | `candidate-a@example.com` |
+| 当前场景目标候选人 | `candidate-k@example.com` |
+| 当前场景干扰候选人 | `fake-test@example.com` |
 
 这样就能在只有两个真实邮箱的情况下，仍然模拟：
 
@@ -217,16 +247,16 @@ WHERE talent_id = '<talent_id>';
 ### 预设
 
 - 候选人 A：`E2E_R1_NEGOTIATION_A`
-- 邮箱：`candidate-a@example.com`
+- 邮箱：`fake-test@example.com`
 - 干扰候选人 B：`E2E_R1_NEGOTIATION_B`
-- 邮箱：`candidate-b@example.com`
+- 邮箱：`candidate-k@example.com`
 
 ### 执行骨架
 
 #### 0. 创建候选人并安排一面
 
 ```bash
-python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "candidate-a@example.com" --position "量化研究实习生"
+python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "fake-test@example.com" --position "量化研究实习生"
 python3 round1/cmd_round1_schedule.py --talent-id <talent_id_a> --time "2026-05-10 14:00"
 ```
 
@@ -256,7 +286,7 @@ python3 exam/daily_exam_review.py --interview-confirm-only
 - A 仍是 `ROUND1_SCHEDULING`
 - `round1_confirm_status = PENDING`
 - `round1_time = 2026-05-11 15:00`
-- `round1_last_email_id` 更新到 A 的这封邮件
+- `talent_emails` 增 1 行 inbound 记录（v3.5.2：原 round1_last_email_id 已 DROP，邮件证据改在 talent_emails 表）
 - B 不影响 A
 
 #### 2. 第 2 轮协商
@@ -278,7 +308,7 @@ python3 exam/daily_exam_review.py --interview-confirm-only
 - 仍是 `ROUND1_SCHEDULING`
 - `round1_confirm_status = PENDING`
 - `round1_time = 2026-05-12 10:00`
-- `round1_last_email_id` 更新为第 2 轮邮件
+- `talent_emails` 又增 1 行 inbound（v3.5.2：原 round1_last_email_id 已 DROP）
 
 #### 3. 第 3 轮候选人同意
 
@@ -368,11 +398,11 @@ python3 exam/daily_exam_review.py --interview-confirm-only
 
 ### 期望
 
-- 自动执行 `interview/cmd_defer.py --round 1`
+- agent 调 `talent.cmd_update --stage WAIT_RETURN --set wait_return_round=1 --set round1_time=__NULL__`
 - `current_stage = WAIT_RETURN`
 - `wait_return_round = 1`
 - `round1_time` 清空
-- 审计里出现暂缓动作
+- 审计里出现 stage 变更动作
 
 ---
 
@@ -415,9 +445,9 @@ python3 exam/daily_exam_review.py --exam-only
 ### 期望
 
 - 命中目标候选人
-- `exam_last_email_id` 更新
+- `talent_emails` 新增一行（`message_id` 唯一）；其 `ai_payload.intent = exam_submission`
 - `current_stage = EXAM_REVIEWED`
-- `talent_events` 中出现 `exam_prereview`
+- agent 调 `exam.cmd_exam_ai_review` 后 `ai_payload.exam_review_summary` 落库
 - Feishu 报告里能看到：
   - 作答时间
   - 完整性
@@ -496,7 +526,7 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 - `ROUND2_SCHEDULED -> ROUND2_SCHEDULING`
 - `round2_confirm_status = PENDING`
 - 原 `round2_time` 保留
-- `round2_last_email_id` 更新
+- `talent_emails` 增 inbound 行（v3.5.2：原 round2_last_email_id 已 DROP）
 - `round2_reschedule_requested` 出现在审计中
 
 ---
@@ -542,7 +572,7 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 - `current_stage` 保持 `ROUND2_SCHEDULED`
 - `round2_confirm_status` 仍是 `CONFIRMED`
 - `round2_time` 保持不变
-- `round2_last_email_id` 更新
+- `talent_emails` 增 inbound 行（v3.5.2：原 round2_last_email_id 已 DROP）
 - 系统只给出提示，不自动回退
 
 ---
@@ -599,7 +629,7 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 - current_stage
 - roundN_confirm_status
 - roundN_time
-- roundN_last_email_id
+- talent_emails 行（v3.5.2：原 roundN_last_email_id 已 DROP）
 - roundN_confirm_prompted_at
 - wait_return_round
 
@@ -616,6 +646,6 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 
 如果你只是想快速验证命令本身是否能跑，继续看：
 
-- `<repo_root>/skills/recruit-ops/docs/CLI_REFERENCE.md`
+- `<RECRUIT_WORKSPACE>/skills/recruit-ops/docs/CLI_REFERENCE.md`
 
 如果你要验证真实的“多轮协商 + 干扰邮件 + pending 语义 + 改期 / 暂缓 / 线上 / 笔试混合邮箱”，优先使用本文件。

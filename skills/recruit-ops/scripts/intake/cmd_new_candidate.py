@@ -12,7 +12,7 @@
     [--wechat zhangwei_wx] \
     [--position 后端工程师] \
     [--education 本科] \
-    [--school 清华大学] \
+    [--school 示例大学] \
     [--work-years 4] \
     [--experience "前美团，做过订单系统"] \
     [--source Boss直聘] \
@@ -45,7 +45,7 @@ import re
 import string
 import sys
 
-from core_state import load_state, save_candidate
+from lib.core_state import load_state, save_candidate
 
 
 def _gen_talent_id(state):
@@ -132,6 +132,10 @@ def main(argv=None):
     p.add_argument("--resume-summary", default="", help="简历摘要（HR 填写）")
     p.add_argument("--source",        default="",  help="简历来源（Boss直聘/猎头/内推/官网）")
     p.add_argument("--cv-path",       default="",  help="简历 PDF 本地路径（由 cmd_parse_cv.py 自动传入）")
+    # v3.5.7：是否会 C++（用于 §5.11 一面派单 cpp_first 优先级）
+    # 三态：true/false/null（默认 null=未判断）。由 cmd_parse_cv 自动传入。
+    p.add_argument("--has-cpp",       default="", choices=["", "true", "false", "null"],
+                   help="是否会 C++ (true/false/null)，由 cmd_parse_cv 解析 CV 后传入")
     p.add_argument("--feishu-notify", action="store_true", help="录入成功后飞书通知老板")
     args = p.parse_args(argv or sys.argv[1:])
 
@@ -192,6 +196,13 @@ def main(argv=None):
     state = load_state()
     talent_id = _gen_talent_id(state)
 
+    has_cpp = None
+    if args.has_cpp == "true":
+        has_cpp = True
+    elif args.has_cpp == "false":
+        has_cpp = False
+    # "" 或 "null" 都视为未判断，落 NULL
+
     cand = {
         "talent_id":       talent_id,
         "stage":           "NEW",
@@ -207,9 +218,43 @@ def main(argv=None):
         "experience":      (args.resume_summary or args.experience).strip() or None,
         "source":          args.source.strip() or None,
         "cv_path":         args.cv_path.strip() or None,
+        "has_cpp":         has_cpp,
     }
 
     save_candidate(talent_id, cand)
+
+    # v3.5.8：候选人入库后立刻建资料目录（cv/exam_answer/email）
+    # warn-continue 风格：mkdir 失败不阻断录入，只飞书 warn 让运维补
+    try:
+        from lib import candidate_storage as _cs
+        dir_result = _cs.ensure_candidate_dirs(talent_id)
+    except Exception as e:
+        dir_result = {"error": "ensure_candidate_dirs 异常: {}".format(e)}
+    candidate_dir_warning = None
+    if dir_result.get("error"):
+        candidate_dir_warning = dir_result["error"]
+        try:
+            from lib import feishu as _fn
+            _fn.send_text(
+                "⚠️ 候选人 {} ({}) 已入库，但资料目录创建失败：\n{}\n"
+                "请运维手动 `mkdir -p` 或排查盘空间 / 权限。".format(
+                    talent_id, args.name.strip(), candidate_dir_warning))
+        except Exception:
+            pass  # 飞书也挂时只能继续；候选人入库本身已成功
+
+    # v3.5.9：建完真目录顺手补一条 by_name 软链，HR 在文件管理器里能按姓名找
+    # warn-continue：alias 不影响主流程，失败 swallow
+    alias_path = None
+    try:
+        from lib import candidate_aliases as _ca
+        alias_result = _ca.rebuild_alias_for(talent_id, args.name.strip())
+        if alias_result.get("error"):
+            print("[cmd_new_candidate] alias 重建报错: {}".format(alias_result["error"]),
+                  file=sys.stderr)
+        else:
+            alias_path = alias_result.get("alias_path")
+    except Exception as e:
+        print("[cmd_new_candidate] alias 重建异常: {}".format(e), file=sys.stderr)
 
     lines = [
         "[新候选人已录入]",
@@ -217,6 +262,13 @@ def main(argv=None):
         "- 姓名     : {}".format(args.name),
         "- 邮箱     : {}".format(args.email),
     ]
+    if dir_result.get("dry_run"):
+        lines.append("- 资料目录 : {} (dry-run, 未创建)".format(
+            dir_result.get("candidate_dir", "")))
+    elif candidate_dir_warning:
+        lines.append("- 资料目录 : ⚠️ 创建失败，{}".format(candidate_dir_warning))
+    else:
+        lines.append("- 资料目录 : {}".format(dir_result.get("candidate_dir", "")))
     if args.position:
         lines.append("- 岗位     : {}".format(args.position))
     if args.education or args.school:
@@ -229,11 +281,21 @@ def main(argv=None):
         lines.append("- 简历摘要 : {}".format(args.experience[:80]))
     lines.append("- 当前阶段 : NEW（等待老板安排一面时间）")
     lines.append("")
-    lines.append("老板可通过以下命令安排一面：")
+    lines.append("老板可通过以下命令安排一面（v3.5：agent 调 lib.run_chain 串原子 CLI）：")
     lines.append(
-        "  uv run python3 scripts/round1/cmd_round1_schedule.py --talent-id {} --time \"YYYY-MM-DD HH:MM\"".format(
-            talent_id
-        )
+        "  uv run python3 -m outbound.cmd_send --talent-id {} --template round1_invite \\".format(talent_id)
+    )
+    lines.append(
+        "      --vars round1_time=\"YYYY-MM-DD HH:MM\" --json"
+    )
+    lines.append(
+        "  uv run python3 -m talent.cmd_update --talent-id {} --stage ROUND1_SCHEDULING \\".format(talent_id)
+    )
+    lines.append(
+        "      --set round1_time=\"YYYY-MM-DD HH:MM\" --set round1_invite_sent_at=__NOW__ \\"
+    )
+    lines.append(
+        "      --set round1_confirm_status=PENDING"
     )
 
     output = "\n".join(lines)
@@ -242,7 +304,7 @@ def main(argv=None):
     # 飞书通知老板
     if args.feishu_notify or args.template:
         try:
-            import feishu as _fn
+            from lib import feishu as _fn
             edu_str = " ".join(filter(None, [args.education, args.school]))
             summary_lines = []
             if args.position:

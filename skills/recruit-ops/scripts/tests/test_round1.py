@@ -4,7 +4,6 @@ import unittest
 from unittest import mock
 
 from tests.helpers import call_main, new_candidate, wipe_state
-from core_state import load_candidate
 
 
 class TestRound1Result(unittest.TestCase):
@@ -14,7 +13,7 @@ class TestRound1Result(unittest.TestCase):
 
     def test_exam_attachments_prefer_shared_tar(self):
         from interview import cmd_result as _result_mod
-        from recruit_paths import exam_archive_dir
+        from lib.recruit_paths import exam_archive_dir
 
         tar_path = str(exam_archive_dir() / "笔试题.tar")
         with mock.patch("os.path.isfile", side_effect=lambda p: p == tar_path), \
@@ -33,16 +32,15 @@ class TestRound1Result(unittest.TestCase):
         self.assertIn("一面通过", out)
         self.assertIn("exam-", out)
 
-    def test_round1_reject_keep(self):
+    def test_round1_reject_keep_no_longer_supported(self):
+        """一面 reject_keep 已下线：必须返回错误，提示改用 reject_delete。"""
         tid = new_candidate()
-        out, _, rc = call_main("interview.cmd_result", [
+        _, err, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "reject_keep",
             "--round", "1",
         ])
-        self.assertEqual(rc, 0)
-        self.assertIn("保留人才库", out)
-        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
-        self.assertIn("ROUND1_DONE_REJECT_KEEP", st_out)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("reject_delete", err)
 
     def test_round1_reject_delete(self):
         tid = new_candidate()
@@ -61,69 +59,46 @@ class TestRound1Result(unittest.TestCase):
         ])
         self.assertNotEqual(rc, 0)
 
+    def test_round1_pass_with_invalid_email_fails(self):
+        """回归测试：闵思涵案 (04-20) —— 上层误把模板/正文当成 --email 传进来。
+        即使语法上通过 argparse，也必须被 cmd_result 的 email 格式校验拦下。"""
+        tid = new_candidate()
+        bogus_inputs = [
+            "笔试邀请邮件内容",  # 中文字面量 — 闵思涵案的真实输入
+            "exam invite body",  # 英文 placeholder
+            "邮件正文 张三 sample.user@example.com",  # 嵌入合法邮箱但仍非法
+            "no-at-sign.example.com",  # 没有 @
+            "user@",  # 没有 domain
+        ]
+        for bogus in bogus_inputs:
+            _, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "pass",
+                "--email", bogus, "--round", "1",
+            ])
+            self.assertNotEqual(rc, 0,
+                                "bogus email {!r} 不应被接受".format(bogus))
+            self.assertIn("不是合法邮箱", err,
+                          "bogus={!r} stderr 应给出明确诊断: {}".format(bogus, err))
+
     def test_round1_wrong_stage_fails(self):
         tid = new_candidate()
+        # 走一遍 reject_delete 流程（候选人会被删除）
         call_main("interview.cmd_result", [
-            "--talent-id", tid, "--result", "reject_keep",
+            "--talent-id", tid, "--result", "reject_delete",
             "--round", "1",
         ])
-        # 已是 REJECT 状态，再执行 pass 应失败
+        # 候选人已被删，再执行 pass 应失败
         _, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
             "--round", "1",
         ])
         self.assertNotEqual(rc, 0)
 
-    def test_round1_result_wrapper_still_forwards(self):
-        tid = new_candidate()
-        out, err, rc = call_main("cmd_round1_result", [
-            "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
-        ])
-        self.assertEqual(rc, 0, "{}|{}".format(out, err))
-        self.assertIn("一面通过", out)
-
-
-class TestRound1SchedulingFlow(unittest.TestCase):
-
-    def setUp(self):
-        wipe_state()
-
-    def test_round1_defer_enters_wait_return_and_sends_email(self):
-        tid = new_candidate("一面暂缓人", "r1defer@example.com")
-        out, err, rc = call_main("cmd_round1_schedule", [
-            "--talent-id", tid, "--time", "2026-04-10 10:00",
-        ])
-        self.assertEqual(rc, 0, "{}|{}".format(out, err))
-
-        import cmd_round1_defer
-        with mock.patch.object(cmd_round1_defer, "_send_defer_email", return_value=1357) as email_mock:
-            out, err, rc = call_main("cmd_round1_defer", [
-                "--talent-id", tid,
-                "--reason", "候选人暂时不在国内，之后再约",
-            ])
-
-        self.assertEqual(rc, 0, "{}|{}".format(out, err))
-        self.assertIn("WAIT_RETURN", out)
-        email_mock.assert_called_once()
-        cand = load_candidate(tid)
-        self.assertEqual(cand["stage"], "WAIT_RETURN")
-        self.assertEqual(cand["wait_return_round"], 1)
-
-    def test_round1_confirm_wrapper_still_forwards(self):
-        tid = new_candidate("一面确认人", "r1confirm@example.com")
-        out, err, rc = call_main("cmd_round1_schedule", [
-            "--talent-id", tid, "--time", "2026-04-10 10:00",
-        ])
-        self.assertEqual(rc, 0, "{}|{}".format(out, err))
-
-        from interview import cmd_confirm as _confirm_mod
-        with mock.patch.object(_confirm_mod, "_spawn_calendar_bg", return_value=2468):
-            out, err, rc = call_main("cmd_round1_confirm", ["--talent-id", tid])
-
-        self.assertEqual(rc, 0, "{}|{}".format(out, err))
-        self.assertIn("一面时间已确认", out)
-        cand = load_candidate(tid)
-        self.assertEqual(cand["stage"], "ROUND1_SCHEDULED")
+# v3.5: TestRound1SchedulingFlow 已下线。
+#  - cmd_round1_schedule wrapper 已删除（agent 用 outbound.cmd_send + talent.cmd_update 自拼）
+#  - interview.cmd_{confirm,defer,reschedule} wrapper 已删除（同上）
+# 端到端剧本（schedule → confirm / defer）改由 tests/test_agent_chain.py 用 lib.run_chain
+# 串 atomic CLI 验证；本文件只保留 interview.cmd_result --round 1 的 atomic 行为测试。
 
 
 if __name__ == "__main__":

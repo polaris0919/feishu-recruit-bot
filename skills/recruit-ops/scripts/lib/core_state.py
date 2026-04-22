@@ -7,7 +7,7 @@
     # ... 修改 cand ...
     save_candidate(talent_id, cand)       # 写单个
 
-批量读（仅 cmd_status / cmd_search / daily_exam_review）：
+批量读（仅 cmd_status / cmd_search 等只读查询）：
     state = load_state()                  # {"candidates": {...}}
 """
 import importlib
@@ -15,49 +15,53 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+# v3.6 (2026-04-27/28) 状态机瘦身：
+#   - OFFER_HANDOFF 下线：之前它只是 round2_pass → HR 通知后 1-tick 的瞬时态，
+#     从不持久化；现在 interview.cmd_result --round 2 --result pass 直接一步推到
+#     POST_OFFER_FOLLOWUP（HR Feishu 通知不变）。
+#   - ROUND1_DONE_REJECT_DELETE / ROUND2_DONE_REJECT_DELETE 下线：
+#     reject_delete 走 _handle_reject_delete → talent_db.delete_talent()，物理删人，
+#     根本留不到这俩枚举上。线上 0 行，枚举留着只会误导 agent。
 STAGES = {
     "NEW",
     "ROUND1_SCHEDULING",
     "ROUND1_SCHEDULED",
-    "ROUND1_DONE_PASS",
-    "ROUND1_DONE_REJECT_KEEP",
-    "ROUND1_DONE_REJECT_DELETE",
     "EXAM_SENT",
     "EXAM_REVIEWED",
+    "EXAM_REJECT_KEEP",
     "WAIT_RETURN",
     "ROUND2_SCHEDULING",
     "ROUND2_SCHEDULED",
-    "ROUND2_DONE_PENDING",
-    "ROUND2_DONE_PASS",
     "ROUND2_DONE_REJECT_KEEP",
-    "ROUND2_DONE_REJECT_DELETE",
-    "OFFER_HANDOFF",
+    "POST_OFFER_FOLLOWUP",
 }
 
 STAGE_LABELS = {
     "NEW": "新建",
     "ROUND1_SCHEDULING": "一面排期中",
     "ROUND1_SCHEDULED": "一面已安排",
-    "ROUND1_DONE_PASS": "一面通过",
-    "ROUND1_DONE_REJECT_KEEP": "一面未通过（保留）",
-    "ROUND1_DONE_REJECT_DELETE": "一面未通过（移除）",
     "EXAM_SENT": "笔试已发送",
     "EXAM_REVIEWED": "笔试已审阅",
+    "EXAM_REJECT_KEEP": "笔试未通过（保留）",
     "WAIT_RETURN": "待回国后再约",
     "ROUND2_SCHEDULING": "二面排期中",
     "ROUND2_SCHEDULED": "二面已确认",
-    "ROUND2_DONE_PENDING": "二面结束待定",
-    "ROUND2_DONE_PASS": "二面通过",
     "ROUND2_DONE_REJECT_KEEP": "二面未通过（保留）",
-    "ROUND2_DONE_REJECT_DELETE": "二面未通过（移除）",
-    "OFFER_HANDOFF": "等待发放 Offer",
+    "POST_OFFER_FOLLOWUP": "已结束面试流程，等待发放 Offer / 沟通入职",
 }
 
 
 def _tdb():
     # type: () -> Any
-    """解析当前 talent_db 模块（每次从 sys.modules 取，便于测试注入 fake）。"""
-    return importlib.import_module("talent_db")
+    """解析当前 talent_db 模块（每次从 sys.modules 取，便于测试注入 fake）。
+
+    优先 lib.talent_db（生产路径），fallback 到 bare "talent_db"
+    （兼容 tests/helpers.py 中老式 sys.modules 注入 + 任何 Solution B 之前的引用）。
+    """
+    try:
+        return importlib.import_module("lib.talent_db")
+    except ModuleNotFoundError:
+        return importlib.import_module("talent_db")
 
 
 def _require_db():
@@ -94,7 +98,7 @@ def save_candidate(talent_id, cand):
     _tdb().upsert_one(talent_id, cand)
 
 
-# ─── 批量读（仅供 cmd_status / cmd_search / daily_exam_review）──────────────
+# ─── 批量读（仅供 cmd_status / cmd_search 等只读查询）──────────────────────
 
 def load_state():
     # type: () -> Dict[str, Any]

@@ -1,0 +1,324 @@
+{
+  "version": "2026-04-stockquant-intern-v1",
+  "exam_title": "沪深逐笔行情数据处理 - 实习生笔试",
+  "exam_summary": "基于沪深交易所逐笔委托/成交数据，按 local_time 全局排序后，重建 SH600000 与 SZ000001 共两个标的全天 241 个分钟级时点的 5 档盘口快照，并交付字段映射 + 沪深差异说明文档。",
+  "exam_required_outputs": [
+    "Python 代码（必须）",
+    "C++ 代码（加分项，可优先获得实习机会）",
+    "数据解析说明文档（字段映射 + 沪深规则差异）",
+    "盘口撮合 CSV：每只股票 241 个时点，含 ts/stock_code/bidprice[5]/bidvolume[5]/askprice[5]/askvolume[5]/last_price"
+  ],
+  "passing_hint": 75,
+  "must_haves": [
+    "提交了至少一个可运行的 Python 实现",
+    "提交了字段映射与沪深差异说明文档",
+    "输出了 SH600000 与 SZ000001 两个标的的盘口 CSV"
+  ],
+
+  "dimensions": [
+    {
+      "key": "biz_understanding",
+      "label": "业务理解与沪深差异",
+      "weight": 25,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0":  "完全没区分沪深，用一套逻辑跑两个市场，或基本字段含义全部错误",
+        "10": "意识到沪深有差异但只处理了 1–2 处，仍存在基本字段误用",
+        "18": "沪深四大差异（撤单口径、订单主键、深市特殊委托、集合竞价时间戳）至少处理了 3 处且大体正确",
+        "25": "四大差异全部正确处理，且代码与文档一致：沪市撤单走 order_type=D、深市撤单走 trade_type=C；沪市主键 orderorino、深市主键 order_index；深市 1/U 与限价单分开；沪市开盘集合竞价时间戳 92500010 与深市 92500000 区别清楚"
+      },
+      "must_quote_evidence": true
+    },
+
+    {
+      "key": "logic_correctness",
+      "label": "逻辑正确性与盘口撮合",
+      "weight": 25,
+      "scoring_mode": "checklist",
+      "checklist": [
+        {
+          "key": "L1_three_layer_state",
+          "label": "三层状态机：orders + bid_book + ask_book",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "把订单簿用单层结构维护，没有委托号 → 价位的映射，或者每次快照都从 raw 数据全量重算",
+            "1": "有 orders 字典 + 一份 book，但 book 没有按价位聚合，每次快照需要遍历全部 orders",
+            "2": "三层状态齐备：orders[order_id]={side,price,remaining_volume} + bid_book[price]→volume + ask_book[price]→volume，且事件驱动正确更新",
+            "3": "在 2 的基础上 bid/ask book 使用有序结构（SortedDict / std::map / 红黑树等），快照取前 5 档为 O(log n) 量级"
+          }
+        },
+        {
+          "key": "L2_sh_order_pk",
+          "label": "沪市订单主键 orderorino",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "沪市错误地用 order_index 作为主键，导致大量成交无法回溯到委托",
+            "1": "沪市用了 orderorino，但与 transaction.buy_id/sell_id 的对齐有缺失",
+            "2": "沪市正确使用 orderorino 与成交对齐，绝大多数成交可回溯",
+            "3": "在 2 的基础上，在代码注释或文档里明确解释了沪市为什么选 orderorino 而不是 order_index"
+          }
+        },
+        {
+          "key": "L3_sz_order_pk",
+          "label": "深市订单主键 order_index",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "深市与沪市混用同一字段作为主键",
+            "1": "深市用了 order_index，但部分链路仍混用其他字段",
+            "2": "深市正确使用 order_index 作为主键并与成交对齐",
+            "3": "在 2 的基础上，文档或代码里讲清楚沪深主键差异的判断依据"
+          }
+        },
+        {
+          "key": "L4_cancel_routing",
+          "label": "沪深撤单分流",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "撤单用一套逻辑通吃，或者直接忽略撤单事件",
+            "1": "识别出撤单但没从 book 中扣减，盘口出现幽灵挂单 / 残留挂单",
+            "2": "沪市 order_type=D 与深市 trade_type=C 都正确识别，并从对应 side 的 book 中扣减剩余量",
+            "3": "在 2 的基础上，撤单时同步更新 orders[id].remaining_volume，避免后续成交对同一笔做二次消费"
+          }
+        },
+        {
+          "key": "L5_sz_special_orders",
+          "label": "深市 1/U 特殊委托处理",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "把 order_type ∈ {1,U} 当普通限价单直接入 book，盘口出现 price=0 的脏档",
+            "1": "识别到 1/U 但只是简单丢弃，无成交回溯",
+            "2": "按三档口径分别处理：order_type=0 直接入 book；1/U 且 price=0 只记 orders、不入 book、靠成交/撤单按订单号驱动；1/U 且 price>0 视为可见剩余量入 book",
+            "3": "在 2 的基础上，能在文档或注释里解释为什么这样处理（即使没给出官方申报类型名，能讲清业务影响也算）"
+          }
+        },
+        {
+          "key": "L6_trade_dual_side",
+          "label": "成交事件双边对账 + 脏档清理",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "成交只更新 last_price，没动 orders/book",
+            "1": "成交动了 book 但只动单边，典型症状：买盘正常、卖盘永远积压",
+            "2": "成交同时扣减 orders[buy_id]、orders[sell_id]、bid_book[price]、ask_book[price]，并更新 last_price",
+            "3": "在 2 的基础上，价位剩余量归零时主动从 book 中删除该 entry，避免空价位脏档"
+          }
+        },
+        {
+          "key": "L7_open_auction",
+          "label": "开盘集合竞价时序与沪深时间戳差异",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "到 92500000 立刻取首档快照，拿到的是竞价前状态",
+            "1": "意识到要等集合竞价消化，但只用了固定 sleep / 固定行数",
+            "2": "用合理的时间窗口（如 +10ms）兜住开盘集合竞价的成交流，首档快照反映竞价后状态",
+            "3": "在 2 的基础上区分了沪市 92500010 与深市 92500000 的时间戳差异，沪市首档快照纳入 92500010 的成交"
+          }
+        },
+        {
+          "key": "L8_close_auction",
+          "label": "收盘集合竞价虚拟撮合",
+          "max": 3,
+          "must_quote_evidence": true,
+          "anchors": {
+            "0": "尾盘 14:57–15:00 穿价不处理，直接输出 bid1>ask1 的错误盘口",
+            "1": "识别到尾盘异常，但只是把那几个时点跳过 / 留空 / 沿用前一个快照",
+            "2": "实现了按最大成交量规则的虚拟撮合，输出虚拟匹配价 + 虚拟匹配量",
+            "3": "在 2 的基础上处理了多解（多个候选价匹配量相同时给出合理口径，如取均值）"
+          }
+        }
+      ],
+      "aggregation": "round( sum(checklist) / 24 * 25 )",
+      "hard_caps": [
+        {
+          "when": "L1_three_layer_state == 0 OR L4_cancel_routing == 0",
+          "cap": 12,
+          "reason": "核心状态机或撤单逻辑缺失，盘口不可信，本维度不允许超过 12 分"
+        }
+      ],
+      "highlight_rules": [
+        { "when": "L7_open_auction >= 2 AND L8_close_auction >= 2", "highlight": "正确处理了开盘与收盘集合竞价" }
+      ]
+    },
+
+    {
+      "key": "output_compliance",
+      "label": "输出结果合规性（241 时点 + 字段）",
+      "weight": 15,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0":  "输出文件缺失，或字段名严重错误",
+        "5":  "输出存在但时点数量明显不对（不是 241，或缺整段时段）",
+        "10": "时点数正确但字段顺序/数组结构不对（如 bidprice 不是长度 5 的数组、缺 last_price）",
+        "15": "完全符合题目六要求：时点 = 92500000 + 上午 120 + 下午 120 = 241；字段含 ts/stock_code/bidprice[5]/bidvolume[5]/askprice[5]/askvolume[5]/last_price；下标 0–4 对应买一至买五 / 卖一至卖五"
+      },
+      "must_quote_evidence": true
+    },
+
+    {
+      "key": "sort_strictness",
+      "label": "数据排序规则严格性",
+      "weight": 5,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0": "完全没按 local_time 排序，或排序键选错",
+        "2": "按 local_time 排了，但 tie-break 没处理",
+        "4": "按 local_time 升序，且同 local_time 不同类型时委托先于成交，但同类型时未保留原顺序",
+        "5": "完全符合题目六要求：local_time 升序 + 同时同类型保留原序 + 同时不同类型委托先于成交"
+      },
+      "must_quote_evidence": true
+    },
+
+    {
+      "key": "code_quality",
+      "label": "代码规范与可读性",
+      "weight": 10,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0":  "单文件超 500 行无函数封装，命名混乱，魔数遍布",
+        "4":  "有基本函数划分，但常量魔数多、命名不统一、注释稀少",
+        "7":  "模块清晰、常量集中、命名一致、关键函数有 docstring/注释",
+        "10": "模块化合理、单一职责、注释解释“为什么”而非“做什么”，沪深逻辑分离干净"
+      }
+    },
+
+    {
+      "key": "engineering",
+      "label": "工程化与可复现性",
+      "weight": 5,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0": "缺依赖说明、相对路径错、本地路径硬编码",
+        "2": "能跑但需要手工 patch 才能复现",
+        "4": "项目结构清晰，requirements/依赖说明完整，一条命令可复现",
+        "5": "在 4 的基础上还提供 README / 运行脚本 / 输出目录约定"
+      }
+    },
+
+    {
+      "key": "documentation",
+      "label": "文档质量（字段映射 + 沪深差异）",
+      "weight": 10,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0":  "未提交说明文档",
+        "4":  "交了文档，但只有字段表，没有沪深差异分析",
+        "7":  "字段映射 + 沪深差异都写了，但缺边界口径说明",
+        "10": "字段映射 + 沪深差异 + 边界点的处理口径 + 选择理由都讲清楚（包含集合竞价、特殊委托、单边盘口等）"
+      },
+      "must_quote_evidence": true
+    },
+
+    {
+      "key": "edge_attitude",
+      "label": "边界情况与态度",
+      "weight": 5,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0": "盘口异常装作没看到，或为掩盖异常硬塞补丁",
+        "2": "识别到异常但没给解释",
+        "4": "识别 + 解释 + 给出处理口径",
+        "5": "在 4 的基础上主动说明“为什么不为了消灭少量异常去过度复杂化”，体现工程取舍意识"
+      }
+    }
+  ],
+
+  "time_modifier": {
+    "label": "完成时间调节项（独立项，不并入主分）",
+    "min": -5,
+    "max": 5,
+    "anchors": {
+      "-5": "明显超期 >96h 且没有说明原因",
+      "-2": "偏慢 72–96h",
+      "0":  "正常区间 6–72h",
+      "+2": "<24h 且主分 ≥80",
+      "+5": "<12h 且主分 ≥85"
+    },
+    "guardrail": [
+      "正向调节（+2 / +5）仅在主分已达对应阈值时才允许给",
+      "若候选人在邮件正文或文档里主动说明合理的延迟原因，AI 可将 -5 上调为 -2，但必须在理由里引用原文",
+      "时间窗口以 talents.exam_sent_at → 候选人首次提交答卷邮件时间为准（复用 analyze_response_time 数据）",
+      "本调节项不并入主分，AI 报告里单独成行输出"
+    ]
+  },
+
+  "bonus_items": [
+    {
+      "key": "cpp_impl",
+      "label": "C++ 实现加分项",
+      "max": 15,
+      "scoring_mode": "anchor",
+      "anchors": {
+        "0":  "未提供 C++ 实现",
+        "5":  "提供了 C++，但只是 Python 翻译，输出与 Python 不一致或编译过不去",
+        "10": "提供 C++，编译可过，输出与 Python 高度一致（差异 <1%）",
+        "15": "在 10 的基础上体现了 C++ 工程能力：合理的容器选择 / 性能考量 / 无明显 UB / 与 Python 输出完全一致"
+      },
+      "rationale": "题目原文：加分项：同时使用 C++ 实现（推荐，可优先获得实习机会）",
+      "must_quote_evidence": true
+    }
+  ],
+
+  "penalties": [
+    { "key": "plagiarism_suspect", "label": "抄袭嫌疑（与公开实现高度雷同且未署名）", "max_deduct": 10 },
+    { "key": "missing_core_files", "label": "核心代码文件缺失",                       "max_deduct": 10 },
+    { "key": "not_runnable",       "label": "不可执行（语法错或缺依赖且无 README）",   "max_deduct": 5  },
+    { "key": "output_count_off",   "label": "输出 CSV 时点数显著偏离 241（误差 >5%）", "max_deduct": 5  },
+    { "key": "sort_violation",     "label": "数据排序规则违背题目硬要求",              "max_deduct": 3  }
+  ],
+
+  "ai_reviewer_instructions": [
+    "禁止输出 pass / fail / 录取 / 淘汰 / 建议通过 / 建议拒绝 等结论性词汇，只输出分数 + 理由 + 老板可执行的下一步建议",
+    "每个维度的分数必须严格落在 anchors / checklist 档位上，不允许创造新分数",
+    "对 must_quote_evidence=true 的项，理由中必须直接引用候选人代码或文档的具体片段或文件路径作为依据",
+    "logic_correctness 维度按 checklist 模式打分，每个 L 项独立 0-3，再按 aggregation 公式折算到 25",
+    "logic_correctness 的 hard_caps 一旦触发（L1=0 或 L4=0），该维度最终分不得超过 cap 值",
+    "完成时间调节项必须单独输出，不允许把它隐式扣进主分",
+    "C++ 加分项必须验证产出文件确实存在或被提及，不存在则直接 0 分",
+    "对任何不确定项，选择保守档位（更低分），并在 risks 中说明不确定的地方",
+    "summary 控制在 80 个汉字以内，给老板看的是定性结论的事实陈述，不带情绪",
+    "所有理由用中文输出"
+  ],
+
+  "output_schema": {
+    "main_score": "int (0-100)",
+    "time_modifier": "int (-5..5)",
+    "bonus_total": "int (0-15)",
+    "penalty_total": "int (0-20)",
+    "final_score_for_reference": "int (capped 0-115)",
+    "dimension_scores": [
+      {
+        "key": "string",
+        "label": "string",
+        "score": "int",
+        "max": "int",
+        "reason": "string"
+      }
+    ],
+    "logic_checklist_scores": [
+      {
+        "key": "string (L1..L8)",
+        "label": "string",
+        "score": "int (0-3)",
+        "reason": "string"
+      }
+    ],
+    "bonus_scores": [
+      { "key": "string", "label": "string", "score": "int", "reason": "string" }
+    ],
+    "penalty_scores": [
+      { "key": "string", "label": "string", "score": "int", "reason": "string" }
+    ],
+    "highlights": ["string"],
+    "risks": ["string"],
+    "summary": "string (<= 80 字)",
+    "next_steps_for_boss": [
+      "string（给老板的可执行建议，例如：建议安排技术面进一步考察 X / 建议补问 Y / 建议直接拒并保留人才库）"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "exam_grader.v35.2026-04-21",
+  "purpose": "笔试代码评分 LLM framing（rubric 数据由 exam_files/rubric.json 在运行时注入）",
+  "model_hint": "qwen3-max",
+  "temperature": 0.0,
+  "timeout_sec": 90,
+  "retries": 2,
+  "role_system": "你是一位严格、专业的招聘笔试评审员。你必须严格按照下面给出的 rubric 对候选人提交进行结构化打分，禁止脱离 rubric 自由发挥。",
+  "output_format_note": "请严格输出符合下面 schema 的 JSON。只输出 JSON，不要 ```json 围栏，不要任何额外解释。所有理由用中文。",
+  "banned_patterns": [
+    "(?:建议|可以|应当|应该|必须|强烈建议|不建议)\\s*(?:通过|不通过|录取|拒绝|淘汰|发\\s*offer)",
+    "(?:直接|建议)\\s*(?:录取|拒绝|淘汰)",
+    "\\bpass(?:ed)?\\b",
+    "\\bfail(?:ed)?\\b",
+    "通过\\s*考核",
+    "未通过\\s*考核",
+    "该候选人\\s*(?:通过|不通过|可以录取|应当淘汰)"
+  ]
+}

@@ -9,15 +9,10 @@ import sys
 import time
 from typing import Iterable, Optional
 
-from recruit_paths import scripts_dir, workspace_path
-from side_effect_guard import fake_pid, side_effects_disabled
+from lib.recruit_paths import scripts_dir, workspace_path
+from lib.side_effect_guard import fake_pid, side_effects_disabled
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-
-_EMAIL_SEND_SCRIPT_CANDIDATES = [
-    str(workspace_path("skills", "email-send", "scripts", "email_send.py")),
-    os.path.expanduser("~/.hermes/skills/openclaw-imports/email-send/scripts/email_send.py"),
-]
 
 
 def _recruit_subprocess_env():
@@ -32,32 +27,40 @@ def _recruit_subprocess_env():
     return env
 
 
-def _email_send_script():
-    # type: () -> str
-    for path in _EMAIL_SEND_SCRIPT_CANDIDATES:
-        if os.path.isfile(path):
-            return path
-    return _EMAIL_SEND_SCRIPT_CANDIDATES[-1]
+def send_bg_email(to, subject, body, tag="email", attachments=None,
+                  talent_id="", candidate_name=""):
+    # type: (str, str, str, str, Optional[Iterable[str]], str, str) -> int
+    """后台发送邮件，返回 watcher 的 PID。
 
-
-def send_bg_email(to, subject, body, tag="email", attachments=None):
-    # type: (str, str, str, str, Optional[Iterable[str]]) -> int
-    """后台发送邮件，返回 PID。tag 用于区分日志文件名。"""
+    tag 用于区分日志文件名。watcher（lib.email_watch）会同步等 SMTP 子进程
+    退出，失败时自动发飞书告警 + 写 talent_events email_smtp_failed 事件。
+    传 talent_id / candidate_name 可让告警更可读，且失败事件能挂到对应候选人。"""
     if side_effects_disabled():
         return fake_pid()
-    cmd = ["python3", _email_send_script(), "--to", to, "--subject", subject, "--body", body]
+    log_path = "/tmp/email_{}_{}_{}.log".format(tag, to.replace("@", "_"), int(time.time()))
+    cmd = [sys.executable, "-m", "lib.email_watch",
+           "--to", to, "--subject", subject, "--body", body,
+           "--tag", tag, "--log-path", log_path]
+    if talent_id:
+        cmd += ["--talent-id", talent_id]
+    if candidate_name:
+        cmd += ["--candidate-name", candidate_name]
     for attachment in (attachments or []):
         if attachment:
             cmd += ["--attachment", attachment]
-    log_path = "/tmp/email_{}_{}_{}.log".format(tag, to.replace("@", "_"), int(time.time()))
-    log_fp = open(log_path, "w")
+    watcher_log = "/tmp/email_watch_{}_{}.log".format(tag, int(time.time()))
+    log_fp = open(watcher_log, "w")
     proc = subprocess.Popen(
-        cmd, start_new_session=True, stdout=log_fp, stderr=log_fp, close_fds=True,
+        cmd,
+        start_new_session=True,
+        stdout=log_fp, stderr=log_fp, close_fds=True,
+        cwd=scripts_dir(),
+        env=_recruit_subprocess_env(),
     )
     log_fp.close()
     with open("/tmp/email_bg.log", "a") as f:
-        f.write("[{}] {} to={} PID={} log={}\n".format(
-            time.strftime("%Y-%m-%d %H:%M:%S"), tag, to, proc.pid, log_path))
+        f.write("[{}] {} to={} watcher_PID={} smtp_log={} watcher_log={}\n".format(
+            time.strftime("%Y-%m-%d %H:%M:%S"), tag, to, proc.pid, log_path, watcher_log))
     return proc.pid
 
 
@@ -71,13 +74,17 @@ def spawn_calendar(
     tag="cal",
 ):
     # type: (str, str, int, str, str, str, str) -> int
-    """后台创建飞书日历事件，返回 PID。"""
+    """后台创建飞书日历事件，返回 PID。
+
+    v3.4 Phase 5：内部走 `python -m feishu.cmd_calendar_create`（atomic CLI），
+    替代旧 lib/feishu/calendar_cli.py。--time / --round 是 CLI 标准参数名。"""
     if side_effects_disabled():
         return fake_pid()
-    script = os.path.join(_HERE, "feishu", "calendar_cli.py")
-    cmd = [sys.executable, script, "--talent-id", talent_id, "--round2-time", event_time]
-    if event_round != 2:
-        cmd += ["--event-round", str(event_round)]
+    cmd = [sys.executable, "-m", "feishu.cmd_calendar_create",
+           "--talent-id", talent_id,
+           "--time", event_time,
+           "--round", str(event_round),
+           "--json"]
     if candidate_email:
         cmd += ["--candidate-email", candidate_email]
     if candidate_name:
@@ -105,11 +112,13 @@ def spawn_calendar(
 
 def delete_calendar(event_id, tag="cal_delete"):
     # type: (str, str) -> int
-    """后台删除飞书日历事件，返回 PID。"""
+    """后台删除飞书日历事件，返回 PID。
+
+    v3.4 Phase 5：内部走 `python -m feishu.cmd_calendar_delete`（atomic CLI）。"""
     if side_effects_disabled():
         return fake_pid()
-    script = os.path.join(_HERE, "feishu", "calendar_cli.py")
-    cmd = [sys.executable, script, "--talent-id", "delete-only", "--delete-event-id", event_id]
+    cmd = [sys.executable, "-m", "feishu.cmd_calendar_delete",
+           "--event-id", event_id, "--reason", tag, "--json"]
     log_path = "/tmp/feishu_cal_delete_{}_{}.log".format(event_id[:16], int(time.time()))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(

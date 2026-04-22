@@ -1,29 +1,89 @@
 #!/usr/bin/env python3
 """
-招聘系统全量测试套件 — 聚合入口。
-运行方式：
-    cd <repo_root>/skills/recruit-ops
-    uv run python3 scripts/tests/run_all.py    # 全部测试
-    uv run python3 -m pytest scripts/tests/    # 同等效果
+招聘系统全量测试套件 — 聚合入口（v3.5）。
 
-各模块测试文件：
-    tests/test_candidate.py  — 候选人基础操作（新建 / 状态 / 搜索 / 删除）
-    tests/test_intake.py     — CV 导入（cmd_ingest_cv）
-    tests/test_round1.py     — 一面结果（interview.cmd_result --round 1）
-    tests/test_exam.py       — 笔试（cmd_exam_result / exam_prereview / daily_exam_review）
-    tests/test_round2.py     — 二面（interview.cmd_* / 调度流程）
-    tests/test_common.py     — 公共跨阶段操作（改期请求 / 改期扫描）
-    tests/test_infra.py      — 基础设施（core_state / talent_db / feishu）
+运行方式：
+    cd <RECRUIT_WORKSPACE>/skills/recruit-ops
+    PYTHONPATH=scripts python3 scripts/tests/run_all.py    # 全部测试
+    uv run python3 -m pytest scripts/tests/                # 同等效果
+
+v3.5 调整：
+    - 删除 TestRound1SchedulingFlow / TestRound2SchedulingFlow（wrapper 已下线）
+    - 删除 tests/test_v34_phase2.py（followup wrapper 全删，整文件下线）
+    - 新增 tests/test_v35_phase1_inbox_general.py（统一 intent enum）
+    - 新增 tests/test_v35_phase3_exam_grader.py（lib.exam_grader）
+    - 新增 tests/test_v35_phase4_notify.py（feishu.cmd_notify）
+    - 新增 tests/test_agent_chain.py（v3.5 5 条 + v3.5.1 2 条 = 7 条端到端 agent chain）
 """
 import unittest
 
 from tests.test_candidate import TestNewCandidate, TestStatus, TestSearch, TestRemove
-from tests.test_intake import TestIngestCv
-from tests.test_round1 import TestRound1Result, TestRound1SchedulingFlow
-from tests.test_exam import TestExamResult, TestExamPrereview, TestDailyExamReview
-from tests.test_round2 import TestRound2Result, TestRound2SchedulingFlow
-from tests.test_common import TestRescheduleRequest
-from tests.test_infra import TestCoreState, TestDbFallback, TestFeishu
+from tests.test_intake import TestIngestCv, TestAttachCvImportsToCandidateDir
+from tests.test_candidate_storage import (  # v3.5.8 候选人统一目录
+    TestPathCalc, TestAttachmentDirRouting, TestEnsureCandidateDirs, TestImportCv,
+)
+from tests.test_candidate_aliases import (  # v3.5.9 by_name 软链
+    TestSanitize, TestRebuildAlias, TestRemoveAlias, TestRebuildAll,
+)
+from tests.test_round1 import TestRound1Result
+from tests.test_exam import TestExamResult
+from tests.test_round2 import TestRound2Result
+from tests.test_common import TestTodayInterviews, TestAtomicCLIRegression
+from tests.test_infra import TestCoreState, TestDbFallback, TestFeishu, TestEmailWatch
+from tests.test_followup import (
+    TestStripQuotedReply, TestFlattenHeader,
+    TestHttpRetry, TestSideEffectGuardDB,
+)
+from tests.test_email_templates import (
+    TestRendererEngine, TestTemplateContents, TestCallSitesUseRenderer,
+)
+from tests.test_auto_reject import (
+    TestFindTimeoutCandidates, TestScanMain,
+)
+from tests.test_v33_phase1 import (
+    TestSelfVerify, TestCmdSend, TestCmdUpdate, TestCmdDelete,
+)
+from tests.test_run_chain import TestRunChainBasic
+from tests.test_v34_phase1 import (
+    TestPromptsModule, TestAnalyzerRouting, TestScrubDraft,
+    TestCmdSendUseCachedDraft,
+)
+from tests.test_v34_phase5 import (
+    TestCmdCalendarCreate, TestCmdCalendarDelete, TestBgHelpersCalendarDispatch,
+)
+from tests.test_v35_phase1_inbox_general import (
+    TestInboxGeneralPromptSchema, TestStageAwareRouting,
+)
+from tests.test_v35_phase3_exam_grader import (
+    TestExamGraderLibrary, TestCmdExamAiReviewIntegration,
+)
+from tests.test_v35_phase4_notify import (
+    TestCmdNotifyBoss, TestCmdNotifyHr, TestOldPushAlertGone,
+    TestCmdNotifyInterviewer,  # v3.5.7 §5.11
+)
+from tests.test_agent_chain import (
+    TestRound1ScheduleChain, TestRound1RescheduleChain,
+    TestDeferUntilReturnChain, TestExamPassToRound2Chain,
+    TestPostOfferOneClickSendChain,
+    TestExamRejectKeepChain, TestWaitReturnPokeChain,
+    TestOnboardingOfferChain,
+    TestRound1DispatchChain,  # v3.5.7 §5.11 端到端
+)
+from tests.test_email_attachments import (
+    TestSafeName, TestExtractMetadata, TestExtractAndSave,
+    TestExtractAndSaveValidation,
+)
+from tests.test_auto_attachments import (  # v3.5.10 onboarding_offer 默认附件
+    TestAutoAttachmentsRegistry, TestCmdSendAutoAttach,
+)
+from tests.test_route_interviewer import (  # v3.5.7 §5.11 路由 atomic
+    TestRouteInterviewerCppFirst,
+    TestRouteInterviewerEducation,
+    TestRouteInterviewerAmbiguous,
+    TestRouteInterviewerConfigError,
+    TestRouteInterviewerInputErrors,
+    TestRouteInterviewerNoSideEffects,
+)
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()
@@ -31,13 +91,48 @@ if __name__ == "__main__":
     suite = unittest.TestSuite()
     for cls in [
         TestNewCandidate, TestStatus, TestSearch,
-        TestIngestCv,
-        TestRound1Result, TestRound1SchedulingFlow,
-        TestExamResult, TestExamPrereview, TestDailyExamReview,
-        TestRound2Result, TestRound2SchedulingFlow,
+        TestIngestCv, TestAttachCvImportsToCandidateDir,
+        # v3.5.8 候选人统一目录
+        TestPathCalc, TestAttachmentDirRouting,
+        TestEnsureCandidateDirs, TestImportCv,
+        # v3.5.9 by_name 软链
+        TestSanitize, TestRebuildAlias, TestRemoveAlias, TestRebuildAll,
+        TestRound1Result,
+        TestExamResult,
+        TestRound2Result,
         TestRemove,
-        TestRescheduleRequest,
-        TestCoreState, TestDbFallback, TestFeishu,
+        TestTodayInterviews, TestAtomicCLIRegression,
+        TestCoreState, TestDbFallback, TestFeishu, TestEmailWatch,
+        TestStripQuotedReply, TestFlattenHeader,
+        TestHttpRetry, TestSideEffectGuardDB,
+        TestRendererEngine, TestTemplateContents, TestCallSitesUseRenderer,
+        TestFindTimeoutCandidates, TestScanMain,
+        TestSelfVerify, TestCmdSend, TestCmdUpdate, TestCmdDelete,
+        TestRunChainBasic,
+        TestPromptsModule, TestAnalyzerRouting, TestScrubDraft,
+        TestCmdSendUseCachedDraft,
+        TestCmdCalendarCreate, TestCmdCalendarDelete,
+        TestBgHelpersCalendarDispatch,
+        TestInboxGeneralPromptSchema, TestStageAwareRouting,
+        TestExamGraderLibrary, TestCmdExamAiReviewIntegration,
+        TestCmdNotifyBoss, TestCmdNotifyHr, TestOldPushAlertGone,
+        TestCmdNotifyInterviewer,
+        TestRound1ScheduleChain, TestRound1RescheduleChain,
+        TestDeferUntilReturnChain, TestExamPassToRound2Chain,
+        TestPostOfferOneClickSendChain,
+        TestExamRejectKeepChain, TestWaitReturnPokeChain,
+        TestOnboardingOfferChain,
+        TestRound1DispatchChain,
+        TestSafeName, TestExtractMetadata, TestExtractAndSave,
+        TestExtractAndSaveValidation,
+        # v3.5.10 onboarding_offer 默认附件
+        TestAutoAttachmentsRegistry, TestCmdSendAutoAttach,
+        TestRouteInterviewerCppFirst,
+        TestRouteInterviewerEducation,
+        TestRouteInterviewerAmbiguous,
+        TestRouteInterviewerConfigError,
+        TestRouteInterviewerInputErrors,
+        TestRouteInterviewerNoSideEffects,
     ]:
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

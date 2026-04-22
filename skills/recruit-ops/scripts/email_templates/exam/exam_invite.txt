@@ -1,0 +1,20 @@
+SUBJECT: 【笔试邀请】$company 技术岗位笔试
+
+您好，$candidate_name，
+
+感谢您参加我们的一面！您已顺利进入第二轮——笔试环节。
+
+━━━━━━━━━━━━━━━━━━━━
+📋 笔试说明
+━━━━━━━━━━━━━━━━━━━━
+· 题目已作为附件随本邮件发送
+· 完成后请直接回复本邮件提交
+· 建议完成时间：3~5 个工作日内
+
+$$include(process_overview)$$
+
+$$include(intern_requirements)$$
+
+期待您的回复！
+
+$$include(footer)$$
