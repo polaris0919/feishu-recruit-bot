@@ -13,6 +13,8 @@ cmd_update 不发邮件），如果两边数据不一致没及时发现，故障
 """
 from __future__ import print_function
 
+import datetime as _dt
+import re
 from typing import Any, Optional
 
 from lib import talent_db
@@ -139,7 +141,7 @@ def assert_talent_state(talent_id, expected_stage=None, expected_fields=None):
                                    "expected": None,
                                    "actual": _shorten(actual)})
         else:
-            if actual != expected:
+            if not _values_equal(expected, actual):
                 mismatches.append({"field": field,
                                    "expected": _shorten(expected),
                                    "actual": _shorten(actual)})
@@ -170,3 +172,51 @@ def _shorten(v):
         return None
     s = str(v)
     return s if len(s) <= 200 else s[:200] + "...(+{} chars)".format(len(s) - 200)
+
+
+def _to_datetime(v):
+    # type: (Any) -> Optional[_dt.datetime]
+    """尝试把字符串/datetime 转成 datetime；不是日期值就返回 None。
+
+    支持两种字面量：
+      - ISO 8601: '2026-05-10T09:55:16+08:00'   （cmd_update 写入路径）
+      - PG 默认:  '2026-05-10 09:55:16+08:00'   （psycopg 把 datetime str() 一遍后偶尔出现）
+    """
+    if isinstance(v, _dt.datetime):
+        return v
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s:
+        return None
+    # HR / agent 常传分钟精度 "YYYY-MM-DD HH:MM"；Postgres 取回会变成
+    # "YYYY-MM-DD HH:MM:00+08:00"。这里补齐秒，避免 self-verify 假告警。
+    if re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$", s):
+        s = s + ":00"
+    # 接受 'T' 或空格分隔；让 fromisoformat 兜底
+    candidate = s.replace(" ", "T", 1) if (" " in s and "T" not in s) else s
+    try:
+        return _dt.datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+
+
+def _values_equal(expected, actual):
+    # type: (Any, Any) -> bool
+    """语义相等判断：datetime 不区分 T/空格分隔、tz-aware 比较前归一化。
+
+    背景（v3.5.x bug）：cmd_update 把 __NOW__ 解成 ISO 字符串后写库，psycopg 取回
+    时是 datetime 对象，str(datetime) 用空格分隔，旧版 `expected != actual` 会判
+    不等，触发 assert_talent_state 假告警。
+    """
+    if expected is actual or expected == actual:
+        return True
+    e_dt = _to_datetime(expected)
+    a_dt = _to_datetime(actual)
+    if e_dt is not None and a_dt is not None:
+        if e_dt.tzinfo is None and a_dt.tzinfo is not None:
+            e_dt = e_dt.replace(tzinfo=a_dt.tzinfo)
+        elif e_dt.tzinfo is not None and a_dt.tzinfo is None:
+            a_dt = a_dt.replace(tzinfo=e_dt.tzinfo)
+        return e_dt == a_dt
+    return False

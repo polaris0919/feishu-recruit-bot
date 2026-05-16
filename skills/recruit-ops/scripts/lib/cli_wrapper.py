@@ -44,6 +44,8 @@ class UserInputError(Exception):
 
 # 飞书告警的环境变量开关：CI / 单元测试可以设 1 跳过推送
 _ENV_SUPPRESS = "RECRUIT_SUPPRESS_SELF_VERIFY_ALERT"
+# A2 (v3.8.7): 主开关 RECRUIT_DRY_RUN=1 同时压住告警推送
+_ENV_DRY_RUN_MASTER = "RECRUIT_DRY_RUN"
 
 
 def run_with_self_verify(script_name, main_fn):
@@ -89,16 +91,24 @@ def run_with_self_verify(script_name, main_fn):
 
     except Exception as e:
         tb = traceback.format_exc(limit=8)
+        # v3.8.5：DB 写入失败单独打标，老板飞书里能一眼区分"数据未落库"事故
+        # （INCIDENT_RULES §15 那类同款根因）和普通代码崩溃。
+        is_db_write = type(e).__name__ == "DBWriteError"
+        title_prefix = "DB-WRITE-FAIL" if is_db_write else "CRASHED"
+        ctx = {"error_type": type(e).__name__,
+               "error_message": str(e)[:300],
+               "traceback_tail": tb[-800:],
+               "elapsed_s": round(time.time() - started, 2)}
+        if is_db_write:
+            ctx["sql_preview"] = getattr(e, "sql_preview", "?")
+            ctx["original_error"] = type(getattr(e, "original", e)).__name__
         _push_alert(
             script_name=script_name,
-            title="{} CRASHED: {}".format(script_name, type(e).__name__),
+            title="{} {}: {}".format(script_name, title_prefix, type(e).__name__),
             severity="critical",
-            context={"error_type": type(e).__name__,
-                     "error_message": str(e)[:300],
-                     "traceback_tail": tb[-800:],
-                     "elapsed_s": round(time.time() - started, 2)},
+            context=ctx,
         )
-        print("[cli_wrapper] CRASH: {}".format(e), file=sys.stderr)
+        print("[cli_wrapper] {}: {}".format(title_prefix, e), file=sys.stderr)
         print(tb, file=sys.stderr)
         sys.exit(1)
 
@@ -112,7 +122,9 @@ def _push_alert(script_name, title, severity, context):
       host: <hostname>
       ctx: { ... json ... }
     """
-    if os.getenv(_ENV_SUPPRESS) == "1":
+    if os.getenv(_ENV_SUPPRESS) == "1" or os.getenv(_ENV_DRY_RUN_MASTER, "").strip().lower() in (
+        "1", "true", "yes", "on"
+    ):
         # 测试 / 干跑时不发
         return
 

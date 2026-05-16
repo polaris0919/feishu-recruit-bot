@@ -1,15 +1,24 @@
 {
+  "_comment": "Hermes / OpenClaw gateway 配置：飞书应用凭据 + 老板 / Polaris（日程安排者）/ HR / 面试官 open_id。复制到 openclaw.json 后填真实值。",
+  "_note_open_id": "open_id 必须是 'ou_' 开头的 32 位飞书用户 ID。任何留为 'ou_PLACEHOLDER_*' 前缀的字段都会被 lib/feishu fail-closed 拒绝推送，避免误发到真人账号。",
+  "_note_env_overrides": "FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_BOSS_OPEN_ID / FEISHU_POLARIS_OPEN_ID / FEISHU_HR_OPEN_ID / FEISHU_CALENDAR_ID / FEISHU_INTERVIEWER_{MASTER,BACHELOR,CPP}_OPEN_ID env var 优先级最高。",
+
   "channels": {
     "feishu": {
       "accounts": {
         "feishubot": {
-          "appId": "cli_xxxxxxxxxxxxxxxx",
-          "appSecret": "your_feishu_app_secret",
-          "encryptKey": "",
-          "verificationToken": "",
-          "ownerOpenId": "ou_xxx_boss",
-          "hrOpenId": "ou_xxx_hr",
-          "calendarId": "feishu.cn_xxx@group.calendar.feishu.cn"
+          "appId": "cli_REPLACE_ME",
+          "appSecret": "REPLACE_ME",
+          "bossOpenId": "ou_PLACEHOLDER_BOSS",
+          "polarisOpenId": "ou_PLACEHOLDER_POLARIS",
+          "ownerOpenId": "ou_PLACEHOLDER_POLARIS_LEGACY",
+          "hrOpenId": "ou_PLACEHOLDER_HR",
+          "calendarId": "feishu.cn_REPLACE_ME@group.calendar.feishu.cn",
+          "interviewerMasterOpenId": "ou_PLACEHOLDER_INTERVIEWER_MASTER",
+          "interviewerBachelorOpenId": "ou_PLACEHOLDER_INTERVIEWER_BACHELOR",
+          "interviewerCppOpenId": "ou_PLACEHOLDER_INTERVIEWER_CPP",
+          "domain": "feishu.cn",
+          "enabled": true
         }
       }
     }

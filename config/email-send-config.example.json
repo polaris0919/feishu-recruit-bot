@@ -1,10 +1,14 @@
 {
+  "_comment": "SMTP 发件配置：lib/smtp_sender.py 用此投递面试邀请 / 笔试题 / 拒信。复制到 email-send-config.json 后填真实值。",
+  "_required": ["smtp.host", "smtp.username", "smtp.password", "smtp.from_email"],
+  "_note_port": "port=465 走 SMTP_SSL；port=587 + use_tls=true 走 STARTTLS。其它端口走纯 SMTP（不推荐）。",
+
   "smtp": {
     "host": "smtp.example.com",
     "port": 465,
     "username": "recruit@example.com",
-    "password": "your_smtp_password",
+    "password": "REPLACE_ME",
     "from_email": "recruit@example.com",
-    "use_tls": true
+    "use_tls": false
   }
 }

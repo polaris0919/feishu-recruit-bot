@@ -12,7 +12,7 @@
   PYTHONPATH=scripts python3 -m talent.cmd_list --stage EXAM_SENT,ROUND2_SCHEDULING
 
   # 模糊搜姓名 / 邮箱
-  PYTHONPATH=scripts python3 -m talent.cmd_list --search 候选人L
+  PYTHONPATH=scripts python3 -m talent.cmd_list --search 田依冉
 
   # 只看未处理邮件数 > 0 的
   PYTHONPATH=scripts python3 -m talent.cmd_list --has-unanalyzed

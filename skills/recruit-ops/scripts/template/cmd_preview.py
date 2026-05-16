@@ -51,12 +51,6 @@ _DEMO_VARS: Dict[str, Dict[str, str]] = {
         "company": COMPANY,
         "talent_id": "t_demo01",
     },
-    "reschedule_ack": {
-        "candidate_name": "张三",
-        "round_label": round_label(1),
-        "company": COMPANY,
-        "talent_id": "t_demo01",
-    },
     "reschedule": {
         "candidate_name": "张三",
         "new_time": "2026-04-28 15:00",

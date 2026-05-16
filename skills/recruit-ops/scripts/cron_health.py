@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-_HEARTBEAT_PATH = Path("<RECRUIT_WORKSPACE>/data/.cron_heartbeat")
+_HEARTBEAT_PATH = Path("/home/admin/recruit-workspace/data/.cron_heartbeat")
 
 
 def _read_last():

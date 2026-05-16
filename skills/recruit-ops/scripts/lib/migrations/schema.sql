@@ -1,6 +1,13 @@
 -- schema.sql: 完整数据库终态定义（幂等，可重复执行）
 -- 所有语句均带 IF NOT EXISTS / IF EXISTS 保护，不会重复创建或报错。
 -- 历史迁移已于 2026-04-14 手动执行完毕，此文件仅保留终态 DDL。
+--
+-- 历史增量迁移文件 (v3.3 → v3.8.6) 在 v3.8.7 (2026-05-16) 已统一清盘删除,
+-- 因为本文件 100% 等价覆盖它们的最终态 (ADD/DROP/CHECK 都内联了)。
+-- 若需考古某次具体改动 (含数据回填 / 事故复盘等), 请走:
+--   git log --follow --diff-filter=D scripts/lib/migrations/
+-- 找到删除 commit (98da372 之后那次 chore: drop _applied/), 在它 parent 的 tree
+-- 下查 _applied/<日期>_v<ver>_*.sql。
 
 -- ─── 主表：候选人 ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS talents (
@@ -14,6 +21,7 @@ CREATE TABLE IF NOT EXISTS talents (
     -- 一面
     round1_confirm_status     TEXT DEFAULT 'UNSET',    -- UNSET / PENDING / CONFIRMED
     round1_time               TIMESTAMPTZ,              -- 当前唯一有效时间
+    round1_proposed_time      TIMESTAMPTZ,              -- HR/agent 解析出的待确认时间（确认前不发邮件/建日历）
     round1_invite_sent_at     TIMESTAMPTZ,
     round1_calendar_event_id  TEXT,
     round1_reminded_at        TIMESTAMPTZ,              -- 催老板看结果（面试后）
@@ -22,6 +30,7 @@ CREATE TABLE IF NOT EXISTS talents (
     -- 二面
     round2_confirm_status     TEXT DEFAULT 'UNSET',    -- UNSET / PENDING / CONFIRMED
     round2_time               TIMESTAMPTZ,              -- 当前唯一有效时间
+    round2_proposed_time      TIMESTAMPTZ,              -- HR/agent 解析出的待确认时间（确认前不发邮件/建日历）
     round2_invite_sent_at     TIMESTAMPTZ,
     round2_calendar_event_id  TEXT,
     round2_reminded_at        TIMESTAMPTZ,              -- 催老板看结果（面试后）
@@ -29,8 +38,7 @@ CREATE TABLE IF NOT EXISTS talents (
 
     -- 笔试
     exam_sent_at          TIMESTAMPTZ,
-    -- v3.5.2 (2026-04-21)：以下字段全部下线，迁移见
-    -- 20260421_v35_drop_dead_columns.sql：
+    -- v3.5.2 (2026-04-21)：以下字段全部下线（git log 取 _applied/）:
     --   exam_last_email_id, round1_last_email_id, round2_last_email_id
     --     —— talent_emails 表 (talent_id, message_id) UNIQUE 已接管去重
     --   followup_last_email_id, followup_entered_at, followup_status,
@@ -70,7 +78,10 @@ BEGIN
     -- v3.6 (2026-04-27/28)：合并 OFFER_HANDOFF → POST_OFFER_FOLLOWUP（瞬时态下线）
     -- v3.6 (2026-04-28)：删除 ROUND1_DONE_REJECT_DELETE / ROUND2_DONE_REJECT_DELETE
     --   这两个"名义 stage"从不持久化——reject_delete 直接走 talent_db.delete_talent。
-    -- 见 20260427_v36_drop_offer_handoff.sql、20260428_v36_drop_done_reject_delete.sql
+    -- v3.8 (2026-05-10)：新增 ONBOARDED 终态（候选人完成入职流程的胜利收尾）
+    -- v3.8.2 (2026-05-11)：新增 OFFER_DECLINED_KEEP，从 ROUND2_DONE_REJECT_KEEP 拆出
+    --   "拒 Offer 留池"的独立叶子态（之前两类语义混桶）。
+    -- 4 次 stage 演化的具体 DDL / 数据回填路径见 git log _applied/。
     ALTER TABLE talents ADD CONSTRAINT chk_current_stage CHECK (current_stage IN (
         'NEW',
         'ROUND1_SCHEDULING', 'ROUND1_SCHEDULED',
@@ -78,7 +89,9 @@ BEGIN
         'WAIT_RETURN',
         'ROUND2_SCHEDULING', 'ROUND2_SCHEDULED',
         'ROUND2_DONE_REJECT_KEEP',
-        'POST_OFFER_FOLLOWUP'
+        'OFFER_DECLINED_KEEP',
+        'POST_OFFER_FOLLOWUP',
+        'ONBOARDED'
     ));
 END $$;
 
@@ -118,11 +131,11 @@ CREATE TABLE IF NOT EXISTS talent_events (
     payload   JSONB DEFAULT '{}'::jsonb
 );
 
--- ─── 邮件游标 / followup 字段（v3.5.2 全部下线，详见 20260421 migration）────────
--- 历史保留：原本 ALTER TABLE ADD COLUMN exam_last_email_id / round1_last_email_id /
+-- ─── 邮件游标 / followup 字段（v3.5.2 全部下线，git log 取 _applied/） ─────────
+-- 原本这里 ADD COLUMN 过 exam_last_email_id / round1_last_email_id /
 -- round2_last_email_id / followup_last_email_id / followup_entered_at /
--- followup_status / followup_snoozed_until 与 chk_followup_status CHECK 都在这里，
--- 已由 20260421_v35_drop_dead_columns.sql DROP；此终态文件不再 ADD。
+-- followup_status / followup_snoozed_until + chk_followup_status CHECK，
+-- 已由历史 v3.5.2 migration DROP；终态文件不再 ADD，且无任何代码路径再读写这些列。
 
 -- ─── auto_reject 字段历史（2026-04-22 引入，2026-04-23 删除）─────────────────
 -- 软自动化拒删 (propose / cancel / execute_due) 已下线，缓冲队列指针不再使用。
@@ -131,6 +144,8 @@ ALTER TABLE talents DROP COLUMN IF EXISTS pending_rejection_id;
 -- ─── 面试时间单字段迁移（兼容存量数据库）────────────────────────────────────────────
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS round1_time TIMESTAMPTZ;
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS round2_time TIMESTAMPTZ;
+ALTER TABLE talents ADD COLUMN IF NOT EXISTS round1_proposed_time TIMESTAMPTZ;
+ALTER TABLE talents ADD COLUMN IF NOT EXISTS round2_proposed_time TIMESTAMPTZ;
 
 DO $$
 BEGIN
@@ -151,9 +166,7 @@ BEGIN
     END IF;
 END $$;
 
-ALTER TABLE talents DROP COLUMN IF EXISTS round1_proposed_time;
 ALTER TABLE talents DROP COLUMN IF EXISTS round1_confirmed_time;
-ALTER TABLE talents DROP COLUMN IF EXISTS round2_proposed_time;
 ALTER TABLE talents DROP COLUMN IF EXISTS round2_confirmed_time;
 
 -- ─── 二面状态机语义修正（兼容存量数据库）───────────────────────────────────────
@@ -227,7 +240,7 @@ END $$;
 --   - 用 status 状态机记录处理进度（received/pending_boss/replied/dismissed/...）；
 --   - LLM 摘要/意图作为字段入表，未来可做趋势统计；
 --   - inbound + outbound 同表，按 sent_at 排序即是完整对话线程。
--- 历史 talents.<ctx>_last_email_id 列保留为兜底（双写），未来 phase 删除。
+-- 历史 talents.<ctx>_last_email_id 列已在 v3.5.2 全部 DROP；代码里不再有任何双写路径。
 -- ═══════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS talent_emails (
     -- ── 主键 + 候选人 ──
@@ -306,7 +319,7 @@ BEGIN
         ALTER TABLE talent_emails DROP CONSTRAINT chk_te_context;
     END IF;
     -- v3.5.11 (2026-04-22) 加入 'rejection'，配合 auto_reject.cmd_scan_exam_timeout
-    -- 直发拒信路径。详见 20260422_v3511_talent_emails_context_rejection.sql。
+    -- 直发拒信路径。事故复盘见 docs/INCIDENT_RULES.md §11.2。
     ALTER TABLE talent_emails ADD CONSTRAINT chk_te_context
         CHECK (context IN ('exam','round1','round2','followup','intake',
                            'rejection','unknown'));
@@ -355,7 +368,6 @@ CREATE TRIGGER te_touch_updated_at
     FOR EACH ROW EXECUTE FUNCTION trg_te_touch_updated_at();
 
 -- v3.5.6: inbound 附件元数据（兼容存量数据库）
--- 见 20260424_v356_talent_emails_attachments.sql
 ALTER TABLE talent_emails ADD COLUMN IF NOT EXISTS attachments JSONB;
 COMMENT ON COLUMN talent_emails.attachments IS
     'v3.5.6: 附件元数据数组，由 inbox.cmd_scan 落盘后填写。'
@@ -363,11 +375,27 @@ COMMENT ON COLUMN talent_emails.attachments IS
     'NULL = 无附件或在 v3.5.6 之前落盘的历史行。';
 
 -- v3.5.7: talents.has_cpp（兼容存量数据库）
--- 见 20260425_v357_talents_has_cpp.sql
 ALTER TABLE talents ADD COLUMN IF NOT EXISTS has_cpp BOOLEAN;
 COMMENT ON COLUMN talents.has_cpp IS
     'v3.5.7: LLM 从 CV 解析的「是否会 C++」。'
     'true=明确写了 C++ 技能或用 C++ 做过项目；'
     'false=明确没提 C++ 或只用其他语言；'
-    'NULL=未知/未判断（cmd_parse_cv 返回 null 时直接落地为 NULL）。'
+    'NULL=未知/未判断（lib.cv_parser 返回 null 时直接落地为 NULL）。'
     '由 intake.cmd_route_interviewer 用于 §5.11 一面派单（cpp_first 优先级）。';
+
+-- ─── 迁移版本表（v3.8.5 起入仓） ────────────────────────────────────────────
+-- ops.cmd_db_migrate 会在首次运行时 CREATE IF NOT EXISTS。这里把它入 schema.sql
+-- 一是让 fresh install 端口对齐, 二是给未来新的增量迁移记账。
+-- v3.8.7 (2026-05-16) 清盘后, lib/migrations/ 顶层只剩 schema.sql 一个文件,
+-- cmd_db_migrate --status 永远返回 pending=0; 这张表先空着,
+-- 等下次有真正的增量迁移再开始记账。
+CREATE TABLE IF NOT EXISTS recruit_migrations (
+    filename     TEXT PRIMARY KEY,
+    applied_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sha1         TEXT,
+    notes        TEXT
+);
+COMMENT ON TABLE recruit_migrations IS
+    'v3.8.5: 增量迁移记账表。ops.cmd_db_migrate --apply 每跑一个迁移文件就 INSERT 一行；'
+    '--status 列出 pending/applied。schema.sql 自身不进表（手维护的终态 DDL）。'
+    'v3.8.7 后历史增量迁移已全部内联进 schema.sql 并删档, 该表对 fresh install 是空表。';

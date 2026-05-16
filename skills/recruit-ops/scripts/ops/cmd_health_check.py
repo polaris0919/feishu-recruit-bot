@@ -108,10 +108,10 @@ def _check_dashscope():
             return _result("dashscope", False, "config 缺 dashscope.api_key")
         from lib.dashscope_client import chat_completion
         t0 = time.time()
-        txt = chat_completion(
+        txt, _meta = chat_completion(
             messages=[{"role": "user", "content": "回复一个字：好"}],
             temperature=0,
-            max_tokens=8,
+            extra_payload={"max_tokens": 8},
         )
         dt = (time.time() - t0) * 1000
         if not txt or not txt.strip():

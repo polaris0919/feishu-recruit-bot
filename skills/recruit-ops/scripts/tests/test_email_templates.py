@@ -4,8 +4,8 @@
 为什么必须有这层测试：
   - renderer 一旦行为漂移（fail-fast 退化为 silent fallback、fragment 不展开
     等），事故面是"全公司发出去的招聘邮件全乱了"，必须 CI 兜底
-  - 模板话术变动需要老板 review；测试断言锁定关键关键词（"实习要求"、
-    "≥3 个月" 等），任何静默改动会让 CI 红，强制走 review
+  - 模板话术变动需要老板 review；测试断言锁定每类模板当前承诺的关键
+    关键词，任何静默改动会让 CI 红，强制走 review
 """
 import unittest
 from pathlib import Path
@@ -49,7 +49,7 @@ class TestRendererEngine(unittest.TestCase):
         self.assertNotIn("extra_garbage", body)
 
     def test_fragment_include_substituted(self):
-        # round1_invite 用了 $$include(intern_requirements)$$ 和 $$include(process_overview)$$
+        # round1_invite 保留共享流程/实习要求话术，确保 fragment 已展开
         _, body = renderer.render(
             "round1_invite",
             candidate_name="X", round1_time="t", position="",
@@ -71,14 +71,21 @@ class TestRendererEngine(unittest.TestCase):
             bad_path.unlink()
 
     def test_fragment_strips_leading_trailing_newlines(self):
-        # fragment 文件末尾的 \n 不应叠加成双空行
-        _, body = renderer.render(
-            "round1_invite",
-            candidate_name="X", round1_time="t", position="",
-            position_suffix="", location="L", company="C", talent_id="t_x",
+        # fragment 文件末尾的 \n 不应叠加成双空行。
+        root = Path(renderer.__file__).resolve().parent
+        frag_path = root / "_fragments" / "_test_strip_newlines.txt"
+        tmpl_path = root / "_test_strip_include.txt"
+        frag_path.write_text("\nFRAGMENT\n", encoding="utf-8")
+        tmpl_path.write_text(
+            "SUBJECT: 测试\n\nbefore\n$$include(_test_strip_newlines)$$\nafter\n",
+            encoding="utf-8",
         )
-        # 不允许出现连续 3 个换行（一个空行的 \n\n 是允许的）
-        self.assertNotIn("\n\n\n", body, "fragment 与模板空行叠加成双空行")
+        try:
+            _, body = renderer.render("_test_strip_include")
+            self.assertEqual(body, "before\nFRAGMENT\nafter\n")
+        finally:
+            frag_path.unlink(missing_ok=True)
+            tmpl_path.unlink(missing_ok=True)
 
 
 # ─── 6 个模板的话术契约 ──────────────────────────────────────────────────────────
@@ -93,9 +100,9 @@ class TestTemplateContents(unittest.TestCase):
             position="量化研究员", position_suffix="（量化研究员）",
             location=LOCATION, company=COMPANY, talent_id="t_demo",
         )
-        # 实习要求关键字段
-        self.assertIn("实习期 ≥ 3 个月", body)
-        self.assertIn("每周工作 ≥ 4 天", body)
+        # 实习要求关键字段（v3.8.4 改成更自然话术；任何静默改动让本测试红，强制走 review）
+        self.assertIn("实习期至少 3 个月", body)
+        self.assertIn("每周至少保证 4 天到岗", body)
         self.assertIn("可包含周末", body)
         # 三轮流程必须明示
         self.assertIn("第一轮：线下面试", body)
@@ -121,15 +128,17 @@ class TestTemplateContents(unittest.TestCase):
         self.assertGreater(schedule_pos, intern_pos,
                            "实习要求必须在面试时间板块之前")
 
-    def test_exam_invite_includes_process_and_intern(self):
-        # 笔试邀请同样应让候选人再次看到流程 + 要求
+    def test_exam_invite_includes_exam_instructions(self):
+        # 笔试邀请当前只锁定笔试说明，不重复展示流程 + 实习要求
         _, body = renderer.render(
             "exam_invite",
             candidate_name="张三", company=COMPANY, talent_id="t_demo",
         )
         self.assertIn("笔试", body)
         self.assertIn("第二轮", body)
-        self.assertIn("实习期 ≥ 3 个月", body)
+        self.assertIn("题目已作为附件随本邮件发送", body)
+        self.assertIn("建议完成时间：3 天内", body)
+        self.assertIn("自动视为放弃", body)
         self.assertIn("TALENT_ID: t_demo", body)
 
     def test_round2_invite_uses_third_round_language(self):
@@ -143,16 +152,6 @@ class TestTemplateContents(unittest.TestCase):
         self.assertIn("第三轮", body)
         self.assertIn("2026-05-08 10:00", body)
         self.assertIn(LOCATION, body)
-
-    def test_reschedule_ack_round_label(self):
-        # round_num=1 → "第一轮"
-        _, body = renderer.render(
-            "reschedule_ack",
-            candidate_name="X", round_label=round_label(1),
-            company=COMPANY, talent_id="t_x",
-        )
-        self.assertIn("第一轮", body)
-        self.assertNotIn("第二轮", body)
 
     def test_reschedule_round2_uses_third_round(self):
         # round_num=2 → "第三轮"（候选人语言）
@@ -192,7 +191,7 @@ class TestTemplateContents(unittest.TestCase):
         self.assertIn(LOCATION, body)
         self.assertIn("实习期前 1 个月", body)
         self.assertIn("实习生入职信息登记表", body)
-        self.assertIn("示例科技实习协议", body)
+        self.assertIn("致邃实习协议", body)
         self.assertIn("实习期 ≥ 3 个月", body)
         self.assertIn("每周工作 ≥ 4 天", body)
         self.assertIn("TALENT_ID: t_offer01", body)
@@ -210,26 +209,7 @@ class TestTemplateContents(unittest.TestCase):
 # ─── 调用点确实经过 renderer ──────────────────────────────────────────────────
 
 class TestCallSitesUseRenderer(unittest.TestCase):
-    """烟测：6 个 _send_xxx_email 都真的走 renderer，没有遗留硬编码 body。
-
-    捕获 send_bg_email 的 (subject, body)，断言关键字段在里面。
-    """
-
-    def _capture(self, send_fn, *args, **kwargs):
-        captured = {}
-
-        def fake_send(to, subject, body, **kw):
-            captured["to"] = to
-            captured["subject"] = subject
-            captured["body"] = body
-            captured["kw"] = kw
-            return 12345
-
-        with mock.patch.object(send_fn.__module__ and __import__(send_fn.__module__,
-                               fromlist=["send_bg_email"]),
-                               "send_bg_email", side_effect=fake_send):
-            send_fn(*args, **kwargs)
-        return captured
+    """烟测：业务调用点通过 outbound.cmd_send 模板发送候选人邮件。"""
 
     def test_round1_invite_template_renders_required_sections(self):
         """v3.5：cmd_round1_schedule wrapper 已彻底删除，agent 直接拼 outbound.cmd_send +
@@ -247,37 +227,36 @@ class TestCallSitesUseRenderer(unittest.TestCase):
             talent_id="t_test01",
         )
         self.assertIn("【面试邀请】", subject)
-        self.assertIn("实习期 ≥ 3 个月", body)
+        self.assertIn("实习期至少 3 个月", body)
         self.assertIn("第一轮：线下面试", body)
 
     def test_exam_email_uses_template(self):
-        # side_effects_disabled 下走 placeholder，需要临时关闭来跑模板路径
         from interview import cmd_result as mod
-        with mock.patch.object(mod, "side_effects_disabled", return_value=False), \
-             mock.patch.object(mod, "_get_exam_attachments", return_value=[]), \
-             mock.patch.object(mod, "send_bg_email",
-                               side_effect=lambda *a, **kw: 12345) as p:
-            mod._send_exam_email("t_test01", "test@example.com", "exam-x",
-                                 candidate_name="张三")
+        with mock.patch("email_templates.auto_attachments.auto_attachments_for",
+                        return_value=[]), \
+             mock.patch.object(mod, "send_outbound_template",
+                               return_value={"ok": True, "message_id": "<m@local>"}) as p:
+            res = mod._send_exam_email("t_test01", "test@example.com", "exam-x",
+                                       candidate_name="张三")
             self.assertTrue(p.called)
-            args, _ = p.call_args
-            subject, body = args[1], args[2]
-            self.assertIn("【笔试邀请】", subject)
-            self.assertIn("实习期 ≥ 3 个月", body)
+            self.assertEqual(res["message_id"], "<m@local>")
+            _, kwargs = p.call_args
+            self.assertEqual(kwargs["template"], "exam_invite")
+            self.assertEqual(kwargs["talent_id"], "t_test01")
 
     def test_round2_invite_uses_template(self):
         from exam import cmd_exam_result as mod
-        with mock.patch.object(mod, "send_bg_email",
-                               side_effect=lambda *a, **kw: 12345) as p:
-            mod.send_round2_notification(
+        with mock.patch.object(mod, "send_outbound_template",
+                               return_value={"ok": True, "message_id": "<m@local>"}) as p:
+            res = mod.send_round2_notification(
                 "test@example.com", "t_test01", "2026-05-08 10:00",
-                company="示例科技公司", candidate_name="张三",
+                company="致邃投资", candidate_name="张三",
             )
             self.assertTrue(p.called)
-            args, _ = p.call_args
-            subject, body = args[1], args[2]
-            self.assertIn("第三轮", subject)
-            self.assertIn(LOCATION, body)
+            self.assertEqual(res["message_id"], "<m@local>")
+            _, kwargs = p.call_args
+            self.assertEqual(kwargs["template"], "round2_invite")
+            self.assertEqual(kwargs["vars"]["round2_time"], "2026-05-08 10:00")
 
 
 if __name__ == "__main__":

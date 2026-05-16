@@ -24,7 +24,7 @@
   ensure_candidate_dirs() 是唯一会动盘的入口；其他都是纯计算。
 
 【Env】
-  RECRUIT_DATA_ROOT       数据根目录（默认 <RECRUIT_WORKSPACE>/data）。
+  RECRUIT_DATA_ROOT       数据根目录（默认 <workspace_root>/data）。
                           测试用 setUp 把它指向 tempfile.mkdtemp() 即可隔离。
   RECRUIT_DISABLE_SIDE_EFFECTS=1
                           dry-run 时不真 mkdir，ensure_candidate_dirs() 返回
@@ -54,12 +54,13 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from lib.recruit_paths import workspace_path
 from lib.side_effect_guard import side_effects_disabled
 
 
 # ─── 常量 ─────────────────────────────────────────────────────────────────────
 
-_DEFAULT_DATA_ROOT = "<RECRUIT_WORKSPACE>/data"
+_DEFAULT_DATA_ROOT = workspace_path("data")
 
 # 三个固定子目录名（顺序固定，便于 ensure_candidate_dirs 输出 stable）
 _SUBDIRS = ("cv", "exam_answer", "email")
@@ -79,7 +80,7 @@ _FEISHU_DOC_PREFIX_RE = re.compile(r"^doc_[0-9a-f]{8,32}_+")
 def data_root():
     # type: () -> Path
     """读 env，每次调用都重读以兼容测试 monkeypatch（不 cache）。"""
-    return Path(os.environ.get("RECRUIT_DATA_ROOT", _DEFAULT_DATA_ROOT))
+    return Path(os.environ.get("RECRUIT_DATA_ROOT", str(_DEFAULT_DATA_ROOT)))
 
 
 def candidates_root():
@@ -247,13 +248,13 @@ def strip_feishu_prefix(filename):
     """剥离飞书 Gateway 附件 ID 前缀 `doc_<hex>_`，返回原始文件名。
 
     飞书把消息里的附件落盘时会自动加 `doc_<12hex>_<original>` 前缀，比如
-    `doc_0123456789ab_候选人B简历.pdf`。我们希望候选人 cv/ 目录里只见原始名，
+    `doc_bfcbf2a1a335_车光明简历.pdf`。我们希望候选人 cv/ 目录里只见原始名，
     避免档案路径混进飞书内部 ID。
 
     没匹配到前缀时原样返回；匹配到就剥掉。前后空白也顺手 trim
     （不动文件名中间的空格 / 中文 / 全角符号）。
 
-    >>> strip_feishu_prefix("doc_0123456789ab_张三.pdf")
+    >>> strip_feishu_prefix("doc_bfcbf2a1a335_张三.pdf")
     '张三.pdf'
     >>> strip_feishu_prefix("张三.pdf")
     '张三.pdf'

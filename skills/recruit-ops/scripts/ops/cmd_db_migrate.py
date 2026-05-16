@@ -27,7 +27,12 @@
   PYTHONPATH=scripts python3 -m ops.cmd_db_migrate --apply
 
   # 强制重跑某个文件（绕过 schema_migrations 记录；通常只用于修坏数据）
-  PYTHONPATH=scripts python3 -m ops.cmd_db_migrate --force-file 20260417_v33_talent_emails_extend.sql
+  PYTHONPATH=scripts python3 -m ops.cmd_db_migrate --force-file <date>_v<ver>_<desc>.sql
+
+【v3.8.7 现状】
+  v3.3 → v3.8.6 的 11 个历史增量 migration 已统一删档（见 lib/migrations/README.md）,
+  lib/migrations/ 顶层只剩 schema.sql。所以本工具在没有新增 migration 之前,
+  --status 永远返回 pending=0, --apply 是 no-op。下次有新 migration 时再启用。
 """
 from __future__ import print_function
 

@@ -9,7 +9,7 @@
   - TestStripQuotedReply：邮件引用块剥离规则（实现已迁到 inbox.cmd_scan）
   - TestFlattenHeader   ：smtp_sender._flatten_header 折叠 CRLF / 制表符
   - TestHttpRetry       ：lib.http_retry 通用重试器
-  - TestSideEffectGuardDB：lib.talent_db._update 在 db_writes_disabled 下的拦截
+  - TestSideEffectGuardDB：lib.db.connection._update 在 db_writes_disabled 下的拦截
 """
 from __future__ import print_function
 
@@ -137,24 +137,17 @@ class TestSideEffectGuardDB(unittest.TestCase):
 
     def test_db_writes_disabled_blocks_update(self):
         os.environ["RECRUIT_DISABLE_DB_WRITES"] = "1"
-        # tests/helpers.py 把 sys.modules["lib.talent_db"] 替换成了内存 DB。
-        # 这里要测真实模块的 guard 行为，先临时复原，结束再还原，避免影响其他测试。
-        import importlib
-        import sys as _sys
-        import lib as _lib
-        saved_sys = _sys.modules.pop("lib.talent_db", None)
-        saved_attr = getattr(_lib, "talent_db", None)
         try:
-            tdb = importlib.import_module("lib.talent_db")
-            tdb._is_enabled = lambda: True  # type: ignore[attr-defined]
-            ok = tdb._update("UPDATE talents SET x=1", ())
+            import lib.db.connection as conn
+            original_is_enabled = conn._is_enabled
+            conn._is_enabled = lambda: True  # type: ignore[assignment]
+            try:
+                ok = conn._update("UPDATE talents SET x=1", ())
+            finally:
+                conn._is_enabled = original_is_enabled  # type: ignore[assignment]
             self.assertTrue(ok, "guard 命中时应直接返回 True 不抛错")
         finally:
             os.environ.pop("RECRUIT_DISABLE_DB_WRITES", None)
-            if saved_sys is not None:
-                _sys.modules["lib.talent_db"] = saved_sys
-            if saved_attr is not None:
-                _lib.talent_db = saved_attr
 
 
 if __name__ == "__main__":

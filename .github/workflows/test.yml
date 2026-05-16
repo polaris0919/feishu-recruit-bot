@@ -1,0 +1,77 @@
+name: tests
+
+# v3.8.5：把"测试套件必须绿才能合并"的纪律从口头落地到 CI。
+# 触发条件：所有 PR + main 分支 push。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: uv sync (with dev group)
+        working-directory: skills/recruit-ops
+        run: uv sync --group dev
+
+      # 关键：把所有副作用闸门拧到 OFF，避免 CI 意外触达真 DB / 真飞书 / 真邮箱。
+      # 单元测试本来就用 mock，但多一道防御没坏处。
+      - name: Run pytest
+        working-directory: skills/recruit-ops
+        env:
+          PYTHONPATH: scripts
+          RECRUIT_DISABLE_DB: "1"
+          RECRUIT_DISABLE_SIDE_EFFECTS: "1"
+          RECRUIT_DISABLE_DB_WRITES: "1"
+          RECRUIT_SUPPRESS_SELF_VERIFY_ALERT: "1"
+        run: uv run python3 -m pytest scripts/tests/ -q --tb=short
+
+  lint-quickcheck:
+    # 轻量自检：保证 pyproject 列出的 package 目录都真实存在
+    # （v3.8.5 之前 followup/round1/round2 等已下线的目录还赖在 pyproject.toml 里
+    # 导致新机器 uv sync 直接报错，本步专门防回归）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pyproject.toml packages exist
+        working-directory: skills/recruit-ops
+        run: |
+          python3 - <<'PY'
+          import tomllib, sys
+          from pathlib import Path
+          cfg = tomllib.loads(Path("pyproject.toml").read_text())
+          missing = []
+          for pkg in cfg.get("tool", {}).get("setuptools", {}).get("packages", []):
+              # lib.feishu -> scripts/lib/feishu
+              rel = Path("scripts") / Path(*pkg.split("."))
+              if not rel.is_dir():
+                  missing.append(pkg)
+          if missing:
+              print("FAIL: 以下 packages 在 pyproject.toml 里但目录不存在：", missing)
+              sys.exit(1)
+          print("OK: 所有 packages 都对应到真实目录")
+          PY

@@ -15,10 +15,21 @@ import sys
 # ─── 测试环境隔离 ─────────────────────────────────────────────────────────────
 os.environ.pop("TALENT_DB_PASSWORD", None)
 # v3.5.8：强制（而非 setdefault），避免外层 shell export 了 RECRUIT_DISABLE_SIDE_EFFECTS=0
-# 之后跑测试就把 cv/exam_answer/email 三件套真写到 <RECRUIT_WORKSPACE>/data 下，
+# 之后跑测试就把 cv/exam_answer/email 三件套真写到 /home/admin/recruit-workspace/data 下，
 # 一晚上能堆 75 个孤儿目录（事故复盘见 docs/AGENT_RULES.md §8）。
 # 任何想真写盘的测试要走 setUp/tearDown 自己 pop + 设 RECRUIT_DATA_ROOT 到 tmp。
 os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
+# A2 (v3.8.7): 在测试上下文里把主开关 RECRUIT_DRY_RUN 在导入期 pop, 统一让
+# RECRUIT_DISABLE_SIDE_EFFECTS 当唯一开关。理由:
+#   1) 主开关额外关 DB 整库连接, 会把 @unittest.skipUnless(_db_available())
+#      的 talent_emails 20 个真 DB 集成测试压成"非跳过但不连库"的尴尬态。
+#   2) 已有 17+ 处测试 setUp 通过 pop("RECRUIT_DISABLE_SIDE_EFFECTS") 临时
+#      解放 guard 来验证 Popen 命令, 让主开关一同失活才能保持向后兼容。
+# 因此推荐姿势:
+#   - 跑测试   : `RECRUIT_DRY_RUN=1 pytest`  (主开关来自 shell, helpers 拿掉)
+#   - 跑生产/cron: 任何 cmd 自己设 --dry-run 时, side_effect_guard.enable_dry_run()
+#                  会把 4 个老变量 + 主开关一起开
+os.environ.pop("RECRUIT_DRY_RUN", None)
 
 # 先导入真实 talent_db（供 test_infra.py 直接测模块行为）
 from lib import talent_db as real_talent_db  # noqa: E402
@@ -119,6 +130,12 @@ class _InMemoryTdb:
             return
         cand["round{}_calendar_event_id".format(round_num)] = event_id
 
+    def get_talent_field(self, talent_id, field):
+        cand = self._state.get("candidates", {}).get(talent_id)
+        if not cand:
+            return None
+        return cand.get(field)
+
     def clear_calendar_event_id(self, talent_id, round_num):
         cand = self._state.get("candidates", {}).get(talent_id)
         if not cand:
@@ -200,7 +217,6 @@ class _InMemoryTdb:
                 "{}_invite_sent_at".format(prefix): cand.get("{}_invite_sent_at".format(prefix)),
                 "{}_confirm_status".format(prefix): cand.get("{}_confirm_status".format(prefix)),
                 "{}_calendar_event_id".format(prefix): cand.get("{}_calendar_event_id".format(prefix)),
-                "{}_last_email_id".format(prefix): cand.get("{}_last_email_id".format(prefix)),
             }))
         return results
 
@@ -223,7 +239,6 @@ class _InMemoryTdb:
                 "{}_invite_sent_at".format(prefix): cand.get("{}_invite_sent_at".format(prefix)),
                 "{}_confirm_status".format(prefix): cand.get("{}_confirm_status".format(prefix)),
                 "{}_calendar_event_id".format(prefix): cand.get("{}_calendar_event_id".format(prefix)),
-                "{}_last_email_id".format(prefix): cand.get("{}_last_email_id".format(prefix)),
             }))
         return results
 
@@ -249,7 +264,7 @@ class _InMemoryTdb:
         for k in ("subject", "in_reply_to", "references_chain", "recipients",
                   "received_at", "body_full", "body_excerpt", "stage_at_receipt",
                   "ai_summary", "ai_intent", "ai_payload", "reply_id",
-                  "template"):  # v3.5：cmd_send 把模板名也写进 talent_emails
+                  "template", "attachments"):  # v3.5：cmd_send 把模板名也写进 talent_emails
             row[k] = kw.get(k)
         self._emails[key] = row
         return eid

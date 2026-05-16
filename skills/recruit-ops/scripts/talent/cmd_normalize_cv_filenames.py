@@ -5,8 +5,8 @@
   飞书把 HR 拖进来的附件落盘时会前缀 `doc_<12hex>_<original>`，纯属内部 ID。
   v3.5.10 之前 import_cv 没剥这个前缀就直接搬进 candidates/<tid>/cv/，
   导致 `talents.cv_path` 也带了这个前缀，飞书展示时一眼就能看出来：
-    <RECRUIT_WORKSPACE>/data/candidates/t_demo03/cv/
-        doc_0123456789ab_【股票量化研究员_上海 500-1000元_天】候选人B 1年以内.pdf
+    /home/admin/recruit-workspace/data/candidates/t_d03noa/cv/
+        doc_bfcbf2a1a335_【股票量化研究员_上海 500-1000元_天】车光明 1年以内.pdf
 
 【这个脚本干嘛】
   1. SELECT talent_id, cv_path FROM talents WHERE cv_path LIKE '%/doc_%'

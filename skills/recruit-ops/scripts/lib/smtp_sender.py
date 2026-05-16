@@ -144,10 +144,14 @@ def send_email_with_threading(
 
     返回实际发出的 Message-ID。side_effects_disabled() 时只返回 dry-run id 不投递。
     """
-    smtp = _smtp_cfg()
-    from_email = (smtp.get("from_email") or smtp.get("username") or "").strip()
-    if not from_email:
-        raise RuntimeError("SMTP 配置缺失 from_email")
+    if side_effects_disabled():
+        from_email = "dry-run@local"
+        from_name = from_name or "Recruit Ops Dry Run"
+    else:
+        smtp = _smtp_cfg()
+        from_email = (smtp.get("from_email") or smtp.get("username") or "").strip()
+        if not from_email:
+            raise RuntimeError("SMTP 配置缺失 from_email")
 
     if in_reply_to and normalize_subject:
         final_subject = _normalize_subject_for_reply(subject)

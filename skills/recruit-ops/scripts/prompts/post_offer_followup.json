@@ -1,7 +1,7 @@
 {
   "version": "post_offer_followup.v34.2026-04-21",
   "purpose": "Offer 后跟进意图分析 + 草稿回信。所有判断/决策权在老板。",
-  "model_hint": "qwen3-max",
+  "model_hint": "deepseek-v4-pro",
   "temperature": 0.2,
   "max_body_chars": 2500,
   "has_draft": true,

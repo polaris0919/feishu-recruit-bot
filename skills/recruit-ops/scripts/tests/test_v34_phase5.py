@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -45,6 +47,42 @@ class TestCmdCalendarCreate(unittest.TestCase):
         self.assertIsNone(payload["event_id"])
         self.assertIn("DRY-RUN", payload["message"])
 
+    def test_round1_dry_run_auto_fills_name_and_routes_interviewer(self):
+        from tests.helpers import mem_tdb
+        mem_tdb.upsert_one("t_iv_master", {
+            "talent_id": "t_iv_master",
+            "candidate_name": "黄琪",
+            "candidate_email": "huangqi@example.com",
+            "education": "博士",
+            "has_cpp": False,
+            "stage": "ROUND1_SCHEDULING",
+        })
+        from lib import config as _cfg
+        _cfg._ensure_loaded()
+        saved = dict(_cfg._cache.get("feishu") or {})
+        _cfg._cache["feishu"] = dict(saved)
+        _cfg._cache["feishu"].update({
+            "interviewer_master_open_id": "ou_master_real",
+            "interviewer_bachelor_open_id": "ou_bach_real",
+            "interviewer_cpp_open_id": "ou_cpp_real",
+        })
+        try:
+            out, err, rc = self._call([
+                "--talent-id", "t_iv_master",
+                "--time", "2026-04-25 14:00",
+                "--round", "1",
+                "--duration-minutes", "30",
+                "--dry-run", "--json",
+            ])
+        finally:
+            _cfg._cache["feishu"] = saved
+        self.assertEqual(rc, 0, "stderr=" + err)
+        payload = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual(payload["candidate_name"], "黄琪")
+        self.assertEqual(payload["candidate_email"], "huangqi@example.com")
+        self.assertEqual(payload["extra_attendees"], ["ou_master_real"])
+        self.assertEqual(payload["route"]["interviewer_roles"], ["master"])
+
     def test_missing_time_raises_user_input_error(self):
         out, err, rc = self._call([
             "--talent-id", "t1", "--round", "1", "--json",
@@ -78,6 +116,50 @@ class TestCmdCalendarCreate(unittest.TestCase):
         self.assertEqual(kwargs["round_num"], 2)
         self.assertEqual(kwargs["candidate_email"], "c@x.com")
         self.assertEqual(kwargs["candidate_name"], "张三")
+        self.assertTrue(kwargs["attach_cv"])
+
+    def test_success_extracts_event_id_from_chinese_message(self):
+        """v3.8.6: 真实飞书返回是中文 '事件ID: xxx'，JSON 必须直接给 event_id。
+
+        否则上游 agent 会从 message 里猜 ID，再只写 calendar_event_id 字段，
+        很容易留下 SCHEDULING/PENDING + 已有日历的半状态。
+        """
+        message = (
+            "已在飞书日历创建一面事件：[一面] 何卓远\n"
+            "  - 时间: 2026-05-15 09:30\n"
+            "  - 时长: 30 分钟\n"
+            "  - 事件ID: 9538b254-c881-4d91-aa8f-e3f549e9734c_0\n"
+            "  - 直达链接: https://applink.feishu.cn/client/calendar/event/detail?calendarId=xxx"
+        )
+        with mock.patch("lib.feishu.create_interview_event", return_value=message):
+            out, err, rc = self._call([
+                "--talent-id", "t_cn",
+                "--time", "2026-05-15 09:30",
+                "--round", "2",
+                "--json",
+            ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        payload = json.loads(out.strip().splitlines()[-1])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["event_id"],
+            "9538b254-c881-4d91-aa8f-e3f549e9734c_0")
+
+    def test_success_extracts_event_id_from_chinese_fullwidth_colon(self):
+        """中文全角冒号也要支持。"""
+        with mock.patch(
+            "lib.feishu.create_interview_event",
+            return_value="已创建日历\n事件ID：abc_def-123_0\n完成",
+        ):
+            out, err, rc = self._call([
+                "--talent-id", "t_cn2",
+                "--time", "2026-05-15 09:30",
+                "--round", "2",
+                "--json",
+            ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        payload = json.loads(out.strip().splitlines()[-1])
+        self.assertEqual(payload["event_id"], "abc_def-123_0")
 
     def test_success_with_no_event_id_in_message(self):
         with mock.patch(
@@ -143,9 +225,11 @@ class TestCmdCalendarCreate(unittest.TestCase):
         kwargs = m.call_args.kwargs
         self.assertEqual(kwargs["extra_attendee_open_ids"], ["ou_iv1", "ou_iv2"])
         self.assertEqual(kwargs["duration_minutes"], 30)
+        self.assertTrue(kwargs["attach_cv"])
         payload = json.loads(out.strip().splitlines()[-1])
         self.assertEqual(payload["extra_attendees"], ["ou_iv1", "ou_iv2"])
         self.assertEqual(payload["duration_minutes"], 30)
+        self.assertTrue(payload["attach_cv"])
 
     def test_dry_run_echoes_extras(self):
         """dry-run 也要 echo extra_attendees / duration_minutes，方便 chain debug。"""
@@ -162,6 +246,7 @@ class TestCmdCalendarCreate(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["extra_attendees"], ["ou_iv1"])
         self.assertEqual(payload["duration_minutes"], 30)
+        self.assertTrue(payload["attach_cv"])
 
     def test_no_extra_attendee_default_empty(self):
         """没传 --extra-attendee → []，不破坏老路径（§5.2）。"""
@@ -177,6 +262,221 @@ class TestCmdCalendarCreate(unittest.TestCase):
         kwargs = m.call_args.kwargs
         self.assertEqual(kwargs["extra_attendee_open_ids"], [])
         self.assertIsNone(kwargs["duration_minutes"])  # default → None → lib 内部走 60
+
+    def test_no_attach_cv_passed_through(self):
+        """允许特殊场景关闭 CV 日程附件。"""
+        with mock.patch(
+            "lib.feishu.create_interview_event",
+            return_value="ok event_id=evt_no_cv",
+        ) as m:
+            out, err, rc = self._call([
+                "--talent-id", "t1",
+                "--time", "2026-04-25 14:00",
+                "--round", "2",
+                "--no-attach-cv",
+                "--json",
+            ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        self.assertFalse(m.call_args.kwargs["attach_cv"])
+        payload = json.loads(out.strip().splitlines()[-1])
+        self.assertFalse(payload["attach_cv"])
+
+
+class TestCalendarCvAttachment(unittest.TestCase):
+
+    def setUp(self):
+        helpers.wipe_state()
+        os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
+
+    def tearDown(self):
+        os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
+
+    def _client(self, event_id="evt_cv", upload_token="file_token_cv"):
+        upload_resp = mock.Mock()
+        upload_resp.success.return_value = True
+        upload_resp.data.file_token = upload_token
+        create_resp = mock.Mock()
+        create_resp.success.return_value = True
+        create_resp.data.event.event_id = event_id
+        create_resp.data.event.app_link = ""
+        att_resp = mock.Mock()
+        att_resp.success.return_value = True
+        client = mock.Mock()
+        client.drive.v1.media.upload_all.return_value = upload_resp
+        client.calendar.v4.calendar_event.create.return_value = create_resp
+        client.calendar.v4.calendar_event_attendee.create.return_value = att_resp
+        return client
+
+    def _attendee_user_ids(self, client):
+        req = client.calendar.v4.calendar_event_attendee.create.call_args.args[0]
+        return [att.user_id for att in req.request_body.attendees]
+
+    def test_round1_attendees_are_boss_polaris_and_interviewer(self):
+        from lib import feishu
+        client = self._client(event_id="evt_attendees")
+        with mock.patch("lib.feishu._get_client", return_value=client), \
+             mock.patch("lib.config.get", return_value={
+                 "app_id": "cli_x",
+                 "app_secret": "sec",
+                 "calendar_id": "cal_x",
+                 "boss_open_id": "ou_boss",
+                 "polaris_open_id": "ou_polaris",
+                 "interviewer_bachelor_open_id": "ou_bachelor",
+             }):
+            msg = feishu.create_interview_event(
+                talent_id="t_attendees",
+                interview_time="2026-04-25 14:00",
+                round_num=1,
+                candidate_name="黄琪",
+                extra_attendee_open_ids=["ou_master"],
+                duration_minutes=30,
+                attach_cv=False,
+            )
+
+        self.assertIn("老板、Polaris（日程安排者）、面试官（共 3 人）", msg)
+        self.assertEqual(
+            self._attendee_user_ids(client),
+            ["ou_boss", "ou_polaris", "ou_master"],
+        )
+        self.assertNotIn("ou_bachelor", self._attendee_user_ids(client))
+
+    def test_round2_attendees_are_boss_and_polaris_only(self):
+        from lib import feishu
+        client = self._client(event_id="evt_round2_attendees")
+        with mock.patch("lib.feishu._get_client", return_value=client), \
+             mock.patch("lib.config.get", return_value={
+                 "app_id": "cli_x",
+                 "app_secret": "sec",
+                 "calendar_id": "cal_x",
+                 "boss_open_id": "ou_boss",
+                 "polaris_open_id": "ou_polaris",
+                 "interviewer_bachelor_open_id": "ou_bachelor",
+             }):
+            msg = feishu.create_interview_event(
+                talent_id="t_round2_attendees",
+                interview_time="2026-04-25 14:00",
+                round_num=2,
+                candidate_name="黄琪",
+                attach_cv=False,
+            )
+
+        self.assertIn("老板、Polaris（日程安排者）（共 2 人）", msg)
+        self.assertEqual(self._attendee_user_ids(client), ["ou_boss", "ou_polaris"])
+
+    def test_create_event_uploads_cv_as_calendar_attachment(self):
+        from lib import feishu
+        from tests.helpers import mem_tdb
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(b"%PDF-1.4 demo")
+            f.flush()
+            mem_tdb.upsert_one("t_cv", {
+                "talent_id": "t_cv",
+                "stage": "ROUND1_SCHEDULED",
+                "candidate_name": "张三",
+                "candidate_email": "c@example.com",
+                "cv_path": f.name,
+            })
+            client = self._client()
+            with mock.patch("lib.feishu._get_client", return_value=client), \
+                 mock.patch("lib.config.get", return_value={
+                     "app_id": "cli_x",
+                     "app_secret": "sec",
+                     "calendar_id": "cal_x",
+                     "boss_open_id": "ou_boss",
+                     "polaris_open_id": "ou_polaris",
+                 }):
+                msg = feishu.create_interview_event(
+                    talent_id="t_cv",
+                    interview_time="2026-04-25 14:00",
+                    round_num=1,
+                    candidate_email="c@example.com",
+                    candidate_name="张三",
+                    duration_minutes=30,
+                )
+
+        self.assertIn("CV附件：已上传并挂载", msg)
+        self.assertTrue(client.drive.v1.media.upload_all.called)
+        req = client.calendar.v4.calendar_event.create.call_args.args[0]
+        event = req.request_body
+        self.assertEqual(event.attachments[0].file_token, "file_token_cv")
+
+    def test_missing_cv_does_not_block_calendar_create(self):
+        from lib import feishu
+        from tests.helpers import mem_tdb
+
+        mem_tdb.upsert_one("t_no_cv", {
+            "talent_id": "t_no_cv",
+            "stage": "ROUND1_SCHEDULED",
+            "candidate_name": "张三",
+            "candidate_email": "c@example.com",
+            "cv_path": "",
+        })
+        client = self._client(event_id="evt_no_cv")
+        with mock.patch("lib.feishu._get_client", return_value=client), \
+             mock.patch("lib.config.get", return_value={
+                 "app_id": "cli_x",
+                 "app_secret": "sec",
+                 "calendar_id": "cal_x",
+                 "boss_open_id": "ou_boss",
+                 "polaris_open_id": "ou_polaris",
+             }):
+            msg = feishu.create_interview_event(
+                talent_id="t_no_cv",
+                interview_time="2026-04-25 14:00",
+                round_num=1,
+                candidate_email="c@example.com",
+                candidate_name="张三",
+            )
+
+        self.assertIn("CV附件：未找到 cv_path 或 candidates/<tid>/cv 文件，已跳过", msg)
+        self.assertFalse(client.drive.v1.media.upload_all.called)
+
+    def test_create_event_falls_back_to_candidate_cv_dir(self):
+        from lib import feishu
+        from tests.helpers import mem_tdb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_root = os.environ.get("RECRUIT_DATA_ROOT")
+            os.environ["RECRUIT_DATA_ROOT"] = tmp
+            try:
+                cv_dir = Path(tmp) / "candidates" / "t_cv_dir" / "cv"
+                cv_dir.mkdir(parents=True)
+                cv_file = cv_dir / "候选人简历.pdf"
+                cv_file.write_bytes(b"%PDF-1.4 demo")
+                mem_tdb.upsert_one("t_cv_dir", {
+                    "talent_id": "t_cv_dir",
+                    "stage": "ROUND1_SCHEDULED",
+                    "candidate_name": "张三",
+                    "candidate_email": "c@example.com",
+                    "cv_path": "",
+                })
+                client = self._client(upload_token="file_token_dir")
+                with mock.patch("lib.feishu._get_client", return_value=client), \
+                     mock.patch("lib.config.get", return_value={
+                         "app_id": "cli_x",
+                         "app_secret": "sec",
+                         "calendar_id": "cal_x",
+                         "boss_open_id": "ou_boss",
+                         "polaris_open_id": "ou_polaris",
+                     }):
+                    msg = feishu.create_interview_event(
+                        talent_id="t_cv_dir",
+                        interview_time="2026-04-25 14:00",
+                        round_num=1,
+                        candidate_email="c@example.com",
+                        candidate_name="张三",
+                    )
+            finally:
+                if old_root is None:
+                    os.environ.pop("RECRUIT_DATA_ROOT", None)
+                else:
+                    os.environ["RECRUIT_DATA_ROOT"] = old_root
+
+        self.assertIn("source=cv_dir", msg)
+        req = client.calendar.v4.calendar_event.create.call_args.args[0]
+        event = req.request_body
+        self.assertEqual(event.attachments[0].file_token, "file_token_dir")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -258,11 +558,16 @@ class TestBgHelpersCalendarDispatch(unittest.TestCase):
     def setUp(self):
         # bg_helpers 在 side_effects_disabled 时直接返回 fake_pid，不会 Popen，
         # 所以这里要临时关掉守卫，让我们能验证 Popen 命令。
-        self._saved = os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
+        # A2 (v3.8.7): 主开关 RECRUIT_DRY_RUN 也会触发 side_effects_disabled,
+        # 所以同时 pop。
+        self._saved_side_effects = os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
+        self._saved_dry_run = os.environ.pop("RECRUIT_DRY_RUN", None)
 
     def tearDown(self):
-        if self._saved is not None:
-            os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = self._saved
+        if self._saved_side_effects is not None:
+            os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = self._saved_side_effects
+        if self._saved_dry_run is not None:
+            os.environ["RECRUIT_DRY_RUN"] = self._saved_dry_run
 
     def test_spawn_calendar_uses_new_atomic_cli(self):
         from lib import bg_helpers

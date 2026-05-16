@@ -68,7 +68,12 @@ def _outbound_emails(talent_id):
 # ════════════════════════════════════════════════════════════════════════════
 
 class TestRound1ScheduleChain(unittest.TestCase):
-    """替代旧 round1/cmd_round1_schedule 剧本 wrapper。"""
+    """§5.1 round1 schedule chain（替代旧 round1/cmd_round1_schedule 剧本 wrapper）。
+
+    v3.6 起本 chain 仅服务 ``WAIT_RETURN`` 候选人回归后老板手动重排面试的场景
+    （见 ``AGENT_RULES.md §5.8`` 出口）。NEW 阶段一面派单已统一走 §5.11，
+    对应回归测试见 ``TestRound1DispatchChain``。chain 主体未变，本测试保持原样。
+    """
 
     def setUp(self):
         helpers.wipe_state()
@@ -83,7 +88,6 @@ class TestRound1ScheduleChain(unittest.TestCase):
                 "--vars",
                 "round1_time=2026-04-25 14:00",
                 "position_suffix=（量化研究实习生）",
-                "location=上海市浦东新区",
             ]),
             Step("update", "talent.cmd_update", args=[
                 "--talent-id", tid,
@@ -179,7 +183,6 @@ class TestRound1RescheduleChain(unittest.TestCase):
                     "round_label=一面",
                     "old_time=2026-04-25 14:00",
                     "new_time=2026-04-30 15:00",
-                    "location=上海市浦东新区",
                 ]),
                 Step("update", "talent.cmd_update", args=[
                     "--talent-id", tid,
@@ -289,7 +292,6 @@ class TestExamPassToRound2Chain(unittest.TestCase):
                 "--template", "round2_invite",
                 "--vars",
                 "round2_time=2026-05-08 10:00",
-                "location=上海市浦东新区",
             ]),
             Step("update", "talent.cmd_update", args=[
                 "--talent-id", tid,
@@ -531,7 +533,7 @@ class TestWaitReturnPokeChain(unittest.TestCase):
                     "  1) talent.cmd_update --talent-id {tid} "
                     "--stage ROUND1_SCHEDULING --reason \"candidate returned\"\n"
                     "  2) outbound.cmd_send --talent-id {tid} "
-                    "--template round1_invite --vars round1_time=… location=…".format(
+                    "--template round1_invite --vars round1_time=…".format(
                         tid=tid),
                     "--source", "agent.wait_return_poke",
                 ]),
@@ -602,7 +604,6 @@ class TestOnboardingOfferChain(unittest.TestCase):
                     "interview_feedback=面试表现突出，逻辑清晰。",
                     "daily_rate=350",
                     "onboard_date=2026-05-06",
-                    "location=上海市浦东新区",
                     "evaluation_criteria=实习期前 1 个月为试用期。",
                     "--attach", self.attach_path,
                 ]),
@@ -659,7 +660,6 @@ class TestOnboardingOfferChain(unittest.TestCase):
                     "interview_feedback=测试",
                     "daily_rate=350",
                     "onboard_date=2026-05-06",
-                    "location=上海",
                     "evaluation_criteria=测试",
                     "--attach", bad_path,
                 ]),
@@ -779,7 +779,6 @@ class TestRound1DispatchChain(unittest.TestCase):
                     "--template", "round1_invite",
                     "--vars",
                     "round1_time={}".format(round1_time),
-                    "location=上海市浦东新区",
                     "position_suffix=（量化研究员）",
                 ]),
                 Step("cal", "feishu.cmd_calendar_create", args=cal_args),
@@ -891,7 +890,6 @@ class TestRound1DispatchChain(unittest.TestCase):
                     "--vars",
                     "round1_time=2026-04-26 10:00",
                     "position_suffix=（量化研究员）",
-                    "location=上海市浦东新区",
                 ]),
                 Step("cal", "feishu.cmd_calendar_create", args=cal_args),
                 Step("update", "talent.cmd_update", args=[

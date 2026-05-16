@@ -17,7 +17,7 @@
   PYTHONPATH=scripts python3 -m inbox.cmd_review --talent-id t_abc123 --desc --full
 
   # 按姓名 / 邮箱找 talent_id
-  PYTHONPATH=scripts python3 -m inbox.cmd_review --search 候选人L
+  PYTHONPATH=scripts python3 -m inbox.cmd_review --search 田依冉
 
   # JSON 供 agent 消费
   PYTHONPATH=scripts python3 -m inbox.cmd_review --talent-id t_abc123 --json
