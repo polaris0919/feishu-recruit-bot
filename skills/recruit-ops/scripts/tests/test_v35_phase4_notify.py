@@ -193,6 +193,22 @@ class TestCmdNotifyInterviewer(unittest.TestCase):
         for unused in (m_master, m_cpp, m_boss, m_hr):
             unused.assert_not_called()
 
+    def test_to_polaris_routes_to_polaris(self):
+        with mock.patch("lib.feishu.send_text_to_polaris",
+                        return_value=True) as m_polaris, \
+             mock.patch("lib.feishu.send_text_to_interviewer_bachelor") as m_bach, \
+             mock.patch("lib.feishu.send_text") as m_boss, \
+             mock.patch("lib.feishu.send_text_to_hr") as m_hr:
+            out, err, rc = helpers.call_main(
+                "feishu.cmd_notify", self._common_args("polaris"))
+        self.assertEqual(rc, 0, "stderr=" + err)
+        m_polaris.assert_called_once()
+        for unused in (m_bach, m_boss, m_hr):
+            unused.assert_not_called()
+        result = json.loads(out)
+        self.assertEqual(result["to"], "polaris")
+        self.assertTrue(result["ok"])
+
     def test_to_interviewer_cpp_routes_to_cpp(self):
         with mock.patch("lib.feishu.send_text_to_interviewer_master") as m_master, \
              mock.patch("lib.feishu.send_text_to_interviewer_bachelor") as m_bach, \

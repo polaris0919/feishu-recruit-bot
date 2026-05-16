@@ -18,7 +18,11 @@
     # dry-run：只构造 prompt，不调 LLM，用于自检
     python3 exam/cmd_exam_ai_review.py --talent-id t_xxx --no-llm --save-prompt /tmp/p.txt
 
-不修改候选人状态机字段。最终通过/不通过仍需老板使用 cmd_exam_result.py 决定。
+v3.8.1（事故源 INCIDENT_RULES.md §14 状态机断链）：
+    - 当 `--save-event` 成功 + 当前 stage = EXAM_SENT + 评审无 `_error`，
+      会自动把 stage 推进到 EXAM_REVIEWED（natural transition，不需要 --force）。
+    - 这样后续 cron `cmd_review_reminder` 和 §4.5/§4.6 chain 才能进入路径。
+    - 最终通过/不通过仍需老板使用 cmd_exam_result.py 决定（本命令只推进到"待拍板"）。
 """
 from __future__ import print_function
 
@@ -570,6 +574,27 @@ def main(argv=None):
         else:
             tdb.save_exam_ai_review(args.talent_id, result, actor="manual_review")
             print("[event] exam_ai_review 已写入 talent_events", file=sys.stderr)
+
+            # v3.8.1：评审无错且当前 stage=EXAM_SENT 时,自动推进到 EXAM_REVIEWED
+            # （natural transition；EXAM_SENT→EXAM_REVIEWED 在 _NATURAL_TRANSITIONS 白名单）。
+            # idempotent：stage 已是 EXAM_REVIEWED / 其他 stage（如老板手动 force-jump）一律跳过。
+            if not result.get("_error"):
+                cur_stage = tdb.get_talent_current_stage(args.talent_id)
+                if cur_stage == "EXAM_SENT":
+                    ok = tdb.set_current_stage(
+                        args.talent_id, "EXAM_REVIEWED",
+                        actor="exam_ai_review",
+                        reason="ai review completed, awaiting boss decision",
+                    )
+                    if ok:
+                        print("[stage] EXAM_SENT → EXAM_REVIEWED", file=sys.stderr)
+                    else:
+                        print("[warn] stage 推进失败 (talent_db 未返回 ok)", file=sys.stderr)
+                elif cur_stage and cur_stage != "EXAM_REVIEWED":
+                    print(
+                        "[warn] 当前 stage={} 不是 EXAM_SENT,跳过自动推进 EXAM_REVIEWED".format(cur_stage),
+                        file=sys.stderr,
+                    )
 
     return 0 if not result.get("_error") else 1
 

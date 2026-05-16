@@ -6,8 +6,8 @@
        - 新增 inbox.cmd_scan / inbox.cmd_analyze（替代 daily_exam_review 的入站扫描）
        - 新增 ops.cmd_health_check（每日 09:00 ping 一次 DB/IMAP/SMTP/Feishu）
        - auto_reject.cmd_scan_exam_timeout（替代 exam.cmd_exam_timeout_scan，
-         2026-04-23 起即触即终；v3.5.11 / 2026-04-22 改成"拒+推 EXAM_REJECT_KEEP 留池"，
-         不再 cmd_delete 物理删档，详见 lib/migrations/20260422_v3511_*.sql）
+         v3.8.3 起笔试超时路径为"拒信 + talent.cmd_delete 物理删档 + 归档"；
+         v3.5.11~v3.8.2 曾短暂改为"拒+推 EXAM_REJECT_KEEP 留池"。）
   ② 走 _run_and_report：
        - 失败永远推飞书告警（[CRON FAIL] xxx）
        - 成功**默认静默**：stdout 进 systemd journal 留档，不推飞书。
@@ -32,8 +32,9 @@
   T1 inbox.cmd_scan                          扫所有候选人新入站邮件（含 POST_OFFER_FOLLOWUP）
   T2 inbox.cmd_analyze                       LLM 分析 + 推飞书（stage-aware；POST_OFFER_FOLLOWUP 自带草稿）
   T3 common.cmd_interview_reminder           面试结束催问
-  T4 auto_reject.cmd_scan_exam_timeout       笔试 ≥3 天未回复 → 拒信 + 推 EXAM_REJECT_KEEP 留池 + 飞书通知
-  T5 ops.cmd_health_check                    系统体检（每天只在 09:xx 跑一次）
+  T4 auto_reject.cmd_scan_exam_timeout       笔试 ≥3 天未回复 → 拒信 + 物理删档归档 + 飞书通知
+  T5 cron.cmd_review_reminder                EXAM_REVIEWED ≥3h 未拍板 → 推飞书催老板（v3.8 新增）
+  T6 ops.cmd_health_check                    系统体检（每天只在 09:xx 跑一次）
 
 【v3.4 变更】
   原 T3 `followup.followup_scanner --auto` 已下线：
@@ -67,9 +68,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib import recruit_paths
 
-_LOCK_PATH = Path("/tmp/recruit-cron-runner.lock")
-_HEARTBEAT_PATH = Path("<RECRUIT_WORKSPACE>/data/.cron_heartbeat")
+_LOCK_PATH = Path(os.path.expanduser(
+    os.environ.get("RECRUIT_CRON_LOCK_PATH", "/tmp/recruit-cron-runner.lock")
+))
+_HEARTBEAT_PATH = recruit_paths.workspace_path("data", ".cron_heartbeat")
 _TASK_TIMEOUT_SEC = 300  # 单个子任务上限
 
 
@@ -112,12 +116,21 @@ _TASKS = [
     },
     {
         "id": "exam_timeout_scan",
-        "label": "笔试超时拒+留池",
+        "label": "笔试超时拒+删档",
         "module": "auto_reject.cmd_scan_exam_timeout",
         "args": ["--auto"],
         "only_hours": None,
         "notify_stdout": False,  # 内部对每个被拒人 + 总结单独 feishu.send_text；
                                  # noop 时 stdout 已空（v3.5.11 改造）
+    },
+    {
+        "id": "exam_review_reminder",
+        "label": "笔试已评审待拍板提醒（v3.8）",
+        "module": "cron.cmd_review_reminder",
+        "args": [],  # 默认 3h 阈值;dry-run 时人工跑 --dry-run
+        "only_hours": None,
+        "notify_stdout": False,  # 内部对每个被提醒候选人单独 feishu.send_text；
+                                 # 没有人需提醒时 stdout 是 "暂无 ..." 一行,不推
     },
     {
         "id": "health_check",
@@ -126,6 +139,18 @@ _TASKS = [
         "args": ["--skip", "dashscope"],  # 体检本身不浪费 LLM 配额
         "only_hours": {9},
         "notify_stdout": False,  # 健康时报告进 journal；hard-fail → exit=1 → [CRON FAIL] 报警
+    },
+    {
+        # C2 (v3.8.7): 每日 09:xx 抓一次业务计数器 (stage 分布 / 24h 邮件量 /
+        # 笔试超时 / cron heartbeat / DB 延迟)。
+        # 与 health_check 同节奏: 不浪费 LLM 配额; 报表进 journal 不轰炸老板;
+        # 若 DB 抖动 exit=1 → cron_runner 走 [CRON FAIL] 提醒。
+        "id": "metrics_dump",
+        "label": "业务计数器快照 (v3.8.7)",
+        "module": "ops.cmd_metrics_dump",
+        "args": [],
+        "only_hours": {9},
+        "notify_stdout": False,
     },
 ]
 
@@ -366,7 +391,13 @@ def main(argv=None):
             if not ok:
                 any_failed = True
 
-        _update_heartbeat()
+        # v3.8.5：heartbeat **只在本轮全部任务成功时**更新。之前无论成败都写,
+        # 25h gap 报警只能捕捉"cron 完全不跑"; 一旦某任务连续 N 次失败但 cron 本身
+        # 还在跑, gap 一直被刷新, 报警永远不响, 必须靠 [CRON FAIL] 飞书消息兜底
+        # —— 而飞书消息可能被淹没 / 限流。新行为下, 连续失败 ≥25h 自动触发
+        # [CRON HEARTBEAT GAP] 报警, 即使个别 [CRON FAIL] 漏掉也兜得住。
+        if not any_failed:
+            _update_heartbeat()
         return 0 if not any_failed else 1
     finally:
         if handle is not None:

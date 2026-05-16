@@ -10,26 +10,41 @@ dependencies = [
     "psycopg2-binary",
     "python-dateutil",
     "lark-oapi",
-    "pdfminer-six==20200517",
+    # v3.8.5: 从硬锁 20200517 放宽。锁 2020 年版本在 Python 3.11+ 上经常装不上
+    # 或与现代 cryptography 冲突。lib.cv_parser 只用 high_level.extract_text_to_fp
+    # + layout.LAParams + pdfparser.PDFParser + pdfdocument.PDFDocument 这几个稳定 API,
+    # 自 2021 年起的 release 都兼容。下限锁到 2023-12 一个比较成熟的发布。
+    "pdfminer.six>=20231228",
+]
+
+[dependency-groups]
+# v3.8.5: 测试工具放 dev group, `uv sync --group dev` 或 `uv run pytest` 自动用到。
+# 不放 main dependencies, 生产部署只装运行时所需。
+# v3.8.7 (A4.2): pytest-cov 加进来, 让 phase 测试归档分析 / 覆盖率监控 可复现。
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
 ]
 
 [tool.setuptools]
+# v3.8.5：清掉已下线包（followup v3.5 删除；round1 / round2 在 v3.3 解耦后
+# 并未实建目录，wrapper 走 atomic CLI）。保持列表与 scripts/ 真实目录一致，
+# 否则 uv sync / pip install -e . 报 "package directory ... does not exist"。
 packages = [
     "auto_reject",
     "common",
     "cron",
     "email_templates",
     "exam",
-    "followup",
     "inbox",
     "intake",
     "interview",
     "lib",
+    "lib.db",
     "lib.feishu",
     "ops",
+    "offer",
     "outbound",
-    "round1",
-    "round2",
     "talent",
     "template",
     "tests",
@@ -41,3 +56,14 @@ py-modules = [
 
 [tool.setuptools.package-dir]
 "" = "scripts"
+
+[tool.pytest.ini_options]
+# v3.8.7 (C3): 让 `pytest` (或 `uv run pytest`) 直接能跑, 不再要求每次手敲
+#   PYTHONPATH=scripts pytest scripts/tests/
+# testpaths 锚定 scripts/tests, pythonpath 让 `from lib import ...` 之类的导入解析到。
+# minversion 锁 8.0 跟 dev group 的 pytest>=8.0 对齐。
+testpaths = ["scripts/tests"]
+pythonpath = ["scripts"]
+minversion = "8.0"
+# -q 默认安静输出。-ra 显示 skip/xfail 摘要, 方便发现意外跳过的真 DB 集成测试。
+addopts = "-q -ra"

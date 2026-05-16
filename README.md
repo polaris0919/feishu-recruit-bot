@@ -54,8 +54,8 @@
   - 历史候选人导入
   - PDF / DOCX 简历自动解析与去重
 - **招聘状态机**
-  - `NEW` → 一面 → 笔试 → 二面 → `OFFER_HANDOFF`
-  - 支持保留人才池、待回国恢复、删除等终态/分支
+  - `NEW` → 一面 → 笔试 → 二面 → `POST_OFFER_FOLLOWUP` → `ONBOARDED`
+  - 支持保留人才池（区分"二面失败留池"与"已拒 Offer 留池"，v3.8.2）、待回国恢复、删除等终态/分支
 - **面试协商**
   - 发邀请邮件
   - 扫描候选人回信
@@ -107,17 +107,20 @@ Agent gateway + recruit-ops skill runtime
 ```text
 recruit-workspace/
 ├── README.md                         # 你正在看的项目首页
-├── docs/
-│   └── recruit-ops-SKILL.md         # agent / gateway 使用的主 Skill 文档
 ├── config/                           # 本地配置（不应提交真实凭据）
 └── skills/
-    └── recruit-ops/
+    └── recruit-ops/                  # 自包含 skill 目录，可整体打包分发
+        ├── SKILL.md                  # ⭐ Hermes Gateway 入口（agent 路由 + 安全协议 + 决策主循环）
         ├── README.md                 # 产品级详细文档
-        ├── pyproject.toml            # Python 依赖
-        ├── uv.lock
+        ├── pyproject.toml + uv.lock
         ├── docs/
-        │   ├── CLI_REFERENCE.md
-        │   └── COMPLEX_NEGOTIATION_REGRESSION.md
+        │   ├── INDEX.md              # 一页地图（"我想知道 X 去哪查"）
+        │   ├── AGENT_RULES.md        # 业务决策手册（stage × intent → chain）
+        │   ├── CLI_REFERENCE.md      # 全部 CLI 详细参考
+        │   ├── INCIDENT_RULES.md     # 事故型规则录
+        │   ├── OPERATIONS.md         # 部署 / cron / symlink / 故障排查
+        │   ├── PROJECT_OVERVIEW.md   # 设计动因 / 架构演进
+        │   └── archive/              # 历史归档
         └── scripts/                  # 所有 CLI / runtime 入口
 ```
 
@@ -144,7 +147,7 @@ recruit-workspace/
 - `psycopg2-binary`
 - `python-dateutil`
 - `lark-oapi`
-- `pdfminer-six==20200517`
+- `pdfminer.six>=20231228`
 
 ### 外部服务依赖
 
@@ -186,7 +189,32 @@ pip install -e .
 ### 3. 初始化数据库
 
 ```bash
+# 1) Fresh install：跑终态 DDL（含 recruit_migrations 记账表）
 psql "$DATABASE_URL" -f skills/recruit-ops/scripts/lib/migrations/schema.sql
+
+# 2) 把所有「已被 schema.sql 内联兼容」的历史迁移标记为 applied，
+#    避免 cmd_db_migrate 重跑历史增量。schema.sql 末尾有 INSERT 模板，
+#    打开注释执行即可；或直接：
+psql "$DATABASE_URL" -c "INSERT INTO recruit_migrations (filename, notes) \
+  SELECT regexp_replace(name,'^.*/',''), 'pre-seeded by schema.sql' \
+  FROM (VALUES \
+    ('20260417_v33_talent_emails_extend.sql'), \
+    ('20260421_v35_drop_dead_columns.sql'), \
+    ('20260422_v3511_talent_emails_context_rejection.sql'), \
+    ('20260423_drop_pending_rejection_id.sql'), \
+    ('20260424_v356_talent_emails_attachments.sql'), \
+    ('20260425_v357_talents_has_cpp.sql'), \
+    ('20260427_v36_drop_offer_handoff.sql'), \
+    ('20260428_v36_drop_done_reject_delete.sql'), \
+    ('20260510_v38_add_onboarded_stage.sql'), \
+    ('20260511_v382_offer_declined_keep.sql') \
+  ) AS t(name) ON CONFLICT (filename) DO NOTHING;"
+
+# 3) 后续每次新增迁移：开发者放一个 YYYYMMDD_*.sql 到 lib/migrations/，
+#    运维侧只需：
+cd skills/recruit-ops
+PYTHONPATH=scripts uv run python3 -m ops.cmd_db_migrate --status   # 查 pending
+PYTHONPATH=scripts uv run python3 -m ops.cmd_db_migrate --apply    # 跑 pending
 ```
 
 ---
@@ -194,7 +222,6 @@ psql "$DATABASE_URL" -f skills/recruit-ops/scripts/lib/migrations/schema.sql
 ## ⚙️ 配置
 
 所有本地配置统一放在仓库根目录的 `config/` 下。真实配置文件 **不要提交到 Git**。
-本仓库已提供 `config/*.example.json` 和 `state/recruit_state.example.json` 作为公开模板；请复制后生成你自己的本地运行文件。
 
 最常见的配置文件如下：
 
@@ -250,6 +277,32 @@ export FEISHU_BOSS_OPEN_ID="ou_xxx"
 export FEISHU_HR_OPEN_ID="ou_xxx"
 export FEISHU_CALENDAR_ID="feishu.cn_xxx@group.calendar.feishu.cn"
 export INTERVIEW_CONFIRM_TIMEOUT_MINUTES=2880
+```
+
+### 多环境配置（v3.8.5）
+
+通过 `RECRUIT_ENV` 切换 dev / staging / prod 的 config 文件，避免在同一台机器上手动改 `config/openclaw.json` 来回切：
+
+```bash
+# 默认 = prod，读 config/<name>.json
+unset RECRUIT_ENV
+
+# dev：优先读 config/<name>.dev.json，找不到时 fallback 到 config/<name>.json
+export RECRUIT_ENV=dev
+
+# staging：同理读 config/<name>.staging.json
+export RECRUIT_ENV=staging
+```
+
+查找顺序见 `skills/recruit-ops/scripts/lib/recruit_paths.py::config_candidates`：env 后缀文件优先，找不到再退回通用版本，因此只需为不同环境覆盖你真正想换的那几项（比如只换 `openclaw.dev.json` 指向测试群，DB 和 SMTP 沿用 prod）。
+
+测试 / CI 不依赖任何真实 config，靠以下"全无副作用" env vars：
+
+```bash
+export RECRUIT_DISABLE_DB=1
+export RECRUIT_DISABLE_SIDE_EFFECTS=1
+export RECRUIT_DISABLE_DB_WRITES=1
+export RECRUIT_SUPPRESS_SELF_VERIFY_ALERT=1
 ```
 
 ---
@@ -341,7 +394,7 @@ uv run python3 scripts/interview/cmd_result.py \
 对大多数团队，**推荐的生产运行方式**是：
 
 1. **Hermes / agent gateway** 负责接收 Feishu 消息
-2. `docs/recruit-ops-SKILL.md` 作为主 routing contract
+2. `skills/recruit-ops/SKILL.md` 作为主 routing contract
 3. `recruit-ops` CLI 负责执行真实状态变更
 4. `cron / systemd` 负责自动扫描候选人邮件回复、改期请求与笔试结果
 
@@ -376,10 +429,8 @@ uv run python3 scripts/common/cmd_status.py --all
 适合正式运行，也是**推荐的产品化入口**：
 
 - gateway 负责接 Feishu 消息
-- `docs/recruit-ops-SKILL.md` 定义 agent 路由规则
-- 运行时 skill 入口可以直接引用或软链接到该文件
-
-如果你使用的是 Hermes，可以把运行时 `SKILL.md` 软链接到 `docs/recruit-ops-SKILL.md`；如果你使用的是其他 agent/gateway，也可以复用这份 skill 作为主路由契约。
+- `skills/recruit-ops/SKILL.md` 定义 agent 路由规则；sibling docs（`AGENT_RULES.md` / `CLI_REFERENCE.md` / `INCIDENT_RULES.md` / `OPERATIONS.md` / `INDEX.md`）按需 fetch
+- 运行时 Hermes 用**目录级软链**直接挂载整个 `skills/recruit-ops/` 目录；详见 `skills/recruit-ops/docs/OPERATIONS.md §3`
 
 ### 方式三：cron / systemd 扫描器
 
@@ -387,7 +438,7 @@ uv run python3 scripts/common/cmd_status.py --all
 
 ```bash
 cd skills/recruit-ops
-PYTHONPATH=scripts ./.venv/bin/python scripts/cron_runner.py
+PYTHONPATH=scripts ./.venv/bin/python -m cron.cron_runner
 ```
 
 常见子任务：
@@ -420,10 +471,47 @@ PYTHONPATH=scripts ./.venv/bin/python scripts/cron_runner.py
 
 ## 📚 文档入口
 
-- 产品级详细说明：`skills/recruit-ops/README.md`
-- CLI 总参考：`skills/recruit-ops/docs/CLI_REFERENCE.md`
-- 复杂回归样例：`skills/recruit-ops/docs/COMPLEX_NEGOTIATION_REGRESSION.md`
-- Agent Skill / routing contract：`docs/recruit-ops-SKILL.md`
+| 文档 | 受众 | 用途 |
+|---|---|---|
+| `skills/recruit-ops/SKILL.md` | agent | ⭐ 路由契约 + 决策主循环 + 安全协议（每次对话首读） |
+| `skills/recruit-ops/docs/INDEX.md` | agent / 维护者 | 一页地图（"我想知道 X 去哪查"） |
+| `skills/recruit-ops/docs/AGENT_RULES.md` | agent | 业务决策手册（stage × intent → chain） |
+| `skills/recruit-ops/docs/CLI_REFERENCE.md` | agent / 开发者 | 全部 CLI 参数 / 输出 schema / exit codes |
+| `skills/recruit-ops/docs/INCIDENT_RULES.md` | agent / 维护者 | 事故型规则录（带版本 / 日期） |
+| `skills/recruit-ops/docs/OPERATIONS.md` | 运维 | 部署 / cron / symlink / 故障排查 |
+| `skills/recruit-ops/docs/PROJECT_OVERVIEW.md` | 新人 onboarding | 设计动因 / 架构演进 |
+| `skills/recruit-ops/README.md` | 开发者 | 产品级详细说明 |
+
+---
+
+## 🛠️ 开发 / 贡献
+
+### 本地开发环境
+
+```bash
+cd skills/recruit-ops
+uv sync --group dev       # 装运行时依赖 + pytest
+
+# 跑全量测试（必须绿才能 commit）
+PYTHONPATH=scripts \
+  RECRUIT_DISABLE_DB=1 RECRUIT_DISABLE_SIDE_EFFECTS=1 \
+  RECRUIT_DISABLE_DB_WRITES=1 RECRUIT_SUPPRESS_SELF_VERIFY_ALERT=1 \
+  uv run python3 -m pytest scripts/tests/ -q
+```
+
+### pre-commit hook（强烈建议安装）
+
+仓库根有 `.pre-commit-config.yaml`，会在 `git commit` 前自动跑 pytest、阻止真实 `config/*.json` 入库、检查大文件 / 私钥。
+
+```bash
+pip install pre-commit       # 或 brew install pre-commit
+pre-commit install           # 在仓库根目录跑
+pre-commit run --all-files   # 主动跑一遍（首次接入推荐）
+```
+
+### CI
+
+`.github/workflows/test.yml` 在每个 PR + main push 上跑 Python 3.10 / 3.11 / 3.12 三套测试，并校验 `pyproject.toml` 的 `packages` 列表与真实目录一致（防止又出现 followup / round1 / round2 那种"列表项找不到目录"导致 fresh install 报错）。
 
 ---
 

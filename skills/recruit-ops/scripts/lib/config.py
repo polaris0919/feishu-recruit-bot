@@ -56,6 +56,10 @@ def _ensure_loaded():
     feishu_app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     feishu_app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
     feishu_boss_open_id = os.environ.get("FEISHU_BOSS_OPEN_ID", "").strip()
+    feishu_polaris_open_id = (
+        os.environ.get("FEISHU_POLARIS_OPEN_ID", "").strip()
+        or os.environ.get("FEISHU_SCHEDULER_OPEN_ID", "").strip()
+    )
     feishu_hr_open_id = os.environ.get("FEISHU_HR_OPEN_ID", "").strip()
     feishu_calendar_id = os.environ.get("FEISHU_CALENDAR_ID", "").strip()
 
@@ -79,7 +83,13 @@ def _ensure_loaded():
 
     feishu_app_id = feishu_app_id or acct.get("appId", "")
     feishu_app_secret = feishu_app_secret or acct.get("appSecret", "")
-    feishu_boss_open_id = feishu_boss_open_id or acct.get("ownerOpenId", "") or acct.get("bossOpenId", "")
+    feishu_boss_open_id = feishu_boss_open_id or acct.get("bossOpenId", "")
+    feishu_polaris_open_id = (
+        feishu_polaris_open_id
+        or acct.get("polarisOpenId", "")
+        or acct.get("schedulerOpenId", "")
+        or acct.get("ownerOpenId", "")
+    )
     feishu_hr_open_id = feishu_hr_open_id or acct.get("hrOpenId", "")
     feishu_calendar_id = feishu_calendar_id or acct.get("calendarId", "")
     feishu_interviewer_master_open_id = (
@@ -119,6 +129,9 @@ def _ensure_loaded():
         # Fail closed: missing IDs should block side effects instead of
         # silently sending to a hardcoded production account.
         "boss_open_id": feishu_boss_open_id,
+        # Polaris 是固定日程安排者 / 运营观察者，和老板身份分开。
+        "polaris_open_id": feishu_polaris_open_id,
+        "scheduler_open_id": feishu_polaris_open_id,
         "hr_open_id": feishu_hr_open_id,
         "calendar_id": feishu_calendar_id,
         # v3.5.7：三位一面面试官（详见 AGENT_RULES §5.11）。
@@ -162,7 +175,12 @@ def get(section, key=None):
 
 def db_enabled():
     # type: () -> bool
-    if (os.environ.get("RECRUIT_DISABLE_DB") or "").strip().lower() in ("1", "true", "yes", "on"):
+    # A2 (v3.8.7): 主开关 RECRUIT_DRY_RUN=1 也会关掉 DB（避免测试穿透到真库）。
+    # 保留 RECRUIT_DISABLE_DB 作为兼容别名（OR 语义）。
+    _truthy_vals = ("1", "true", "yes", "on")
+    if (os.environ.get("RECRUIT_DRY_RUN") or "").strip().lower() in _truthy_vals:
+        return False
+    if (os.environ.get("RECRUIT_DISABLE_DB") or "").strip().lower() in _truthy_vals:
         return False
     try:
         import psycopg2  # noqa: F401

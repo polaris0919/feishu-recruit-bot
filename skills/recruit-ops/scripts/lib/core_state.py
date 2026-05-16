@@ -22,6 +22,13 @@ from typing import Any, Dict, Optional, Set
 #   - ROUND1_DONE_REJECT_DELETE / ROUND2_DONE_REJECT_DELETE 下线：
 #     reject_delete 走 _handle_reject_delete → talent_db.delete_talent()，物理删人，
 #     根本留不到这俩枚举上。线上 0 行，枚举留着只会误导 agent。
+# v3.8.2 (2026-05-11) 拆桶：
+#   - 新增 OFFER_DECLINED_KEEP（"已拒 Offer，保留人才库"）作为独立叶子终态。
+#     此前 §4.13 POST_OFFER_FOLLOWUP 分支让 agent force-jump 到 ROUND2_DONE_REJECT_KEEP，
+#     导致"二面失败留池"和"拒 Offer 留池"两类语义混桶（线上 5 人无法区分）。
+#     拆出后 ROUND2_DONE_REJECT_KEEP 严格只承载 ROUND2_SCHEDULED → reject_keep 一条入边。
+#     迁移与回填见 v3.8.2 migration `20260511_v382_offer_declined_keep.sql`
+#     (v3.8.7 已删档, git log scripts/lib/migrations/ 取)。
 STAGES = {
     "NEW",
     "ROUND1_SCHEDULING",
@@ -33,7 +40,9 @@ STAGES = {
     "ROUND2_SCHEDULING",
     "ROUND2_SCHEDULED",
     "ROUND2_DONE_REJECT_KEEP",
+    "OFFER_DECLINED_KEEP",
     "POST_OFFER_FOLLOWUP",
+    "ONBOARDED",
 }
 
 STAGE_LABELS = {
@@ -47,7 +56,9 @@ STAGE_LABELS = {
     "ROUND2_SCHEDULING": "二面排期中",
     "ROUND2_SCHEDULED": "二面已确认",
     "ROUND2_DONE_REJECT_KEEP": "二面未通过（保留）",
+    "OFFER_DECLINED_KEEP": "已拒 Offer（保留人才库）",
     "POST_OFFER_FOLLOWUP": "已结束面试流程，等待发放 Offer / 沟通入职",
+    "ONBOARDED": "已完成入职（叶子终态）",
 }
 
 

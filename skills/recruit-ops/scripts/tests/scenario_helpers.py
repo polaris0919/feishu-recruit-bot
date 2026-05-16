@@ -144,10 +144,6 @@ class ScenarioRunner:
         cand = mem_tdb._state["candidates"][talent_id]
         cand["round{}_invite_sent_at".format(round_num)] = invite_sent_at
 
-    def set_last_email_id(self, talent_id, context, email_id):
-        cand = mem_tdb._state["candidates"][talent_id]
-        cand["{}_last_email_id".format(context)] = email_id
-
     def candidate(self, talent_id):
         return load_candidate(talent_id)
 
@@ -155,11 +151,6 @@ class ScenarioRunner:
         pending = mem_tdb.get_boss_confirm_pending(talent_id, round_num)
         assert pending["pending"] is True, pending
         assert pending["time"] == time, pending
-
-    def assert_last_email_id_updated(self, talent_id, context, email_id):
-        cand = self.candidate(talent_id)
-        actual = cand.get("{}_last_email_id".format(context))
-        assert actual == email_id, (actual, email_id)
 
     # v3.5: patch_daily_exam_review 已删除（daily_exam_review 模块整个下架）。
     # 如果剧本级 chain 测试需要 mock IMAP+LLM，请新建 patch_inbox_pipeline 或直接在

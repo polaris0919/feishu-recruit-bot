@@ -121,6 +121,14 @@ class TestSelfVerify(unittest.TestCase):
         helpers.mem_tdb._state["candidates"][tid]["phone"] = "13800001111"
         sv.assert_talent_state(tid, expected_fields={"phone": "13800001111"})
 
+    def test_assert_talent_state_minute_time_matches_pg_timestamp(self):
+        """v3.8.6：分钟精度输入应匹配 PG 取回的带秒/时区 timestamp。"""
+        tid = _mk_talent()
+        helpers.mem_tdb._state["candidates"][tid]["round1_time"] = (
+            "2026-05-15 10:00:00+08:00")
+        sv.assert_talent_state(
+            tid, expected_fields={"round1_time": "2026-05-15 10:00"})
+
     def test_assert_talent_state_field_set_marker(self):
         tid = _mk_talent()
         helpers.mem_tdb._state["candidates"][tid]["round1_invite_sent_at"] = "2026-04-17T10:00:00"
@@ -181,7 +189,7 @@ class TestCmdSend(unittest.TestCase):
             "--template", "rejection_generic",
             "--vars",
             "candidate_name=张三",
-            "company=示例科技公司",
+            "company=致邃投资",
             "talent_id=" + tid,
             "--json",
         ])
@@ -473,6 +481,46 @@ class TestCmdUpdate(unittest.TestCase):
         # 大致格式：YYYY-MM-DDTHH:MM:SS
         self.assertRegex(actual, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$")
 
+    def test_round1_proposed_time_can_be_recorded_without_side_effects(self):
+        """v3.8.6：首次解析 HR 时间只写 proposed，候选人仍停在 NEW。"""
+        tid = _mk_talent(stage="NEW")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--set", "round1_proposed_time=2026-05-16 10:00",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stdout={} stderr={}".format(out, err))
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "NEW")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_proposed_time"),
+            "2026-05-16 10:00")
+        self.assertIsNone(
+            helpers.mem_tdb.get_talent_field(tid, "round1_invite_sent_at"))
+        self.assertIsNone(
+            helpers.mem_tdb.get_talent_field(tid, "round1_calendar_event_id"))
+
+    def test_confirmed_round1_schedule_clears_proposed_time(self):
+        """确认后正式时间落 round1_time，并清空 proposed。"""
+        tid = _mk_talent(stage="NEW")
+        helpers.mem_tdb._state["candidates"][tid]["round1_proposed_time"] = (
+            "2026-05-16 10:00")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_SCHEDULED",
+            "--set", "round1_time=2026-05-16 10:00",
+            "--set", "round1_proposed_time=__NULL__",
+            "--set", "round1_confirm_status=CONFIRMED",
+            "--set", "round1_calendar_event_id=evt_round1_456",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_time"),
+            "2026-05-16 10:00")
+        self.assertIsNone(
+            helpers.mem_tdb.get_talent_field(tid, "round1_proposed_time"))
+
     def test_atomic_stage_plus_multi_set(self):
         """v3.4 Phase 0.1 关键场景：替代旧 cmd_round1_schedule 的原子写法
         （v3.5 起 wrapper 已彻底删除，本测试就是 agent 直接调原子 CLI 的等价路径）。"""
@@ -506,6 +554,231 @@ class TestCmdUpdate(unittest.TestCase):
         self.assertIsNotNone(
             helpers.mem_tdb.get_talent_field(tid, "round1_invite_sent_at"))
 
+    def test_reject_scheduling_confirmed_without_calendar_event(self):
+        """v3.8.6：禁止 ROUND1_SCHEDULING + CONFIRMED + 无 event_id 半状态。
+
+        事故触发：agent 收到"候选人确认了"后只跑
+        `--set round1_confirm_status=CONFIRMED`，没建日历、没 stage→SCHEDULED，
+        于是 DB 变成"看似确认但其实没日历"。
+        """
+        tid = _mk_talent(stage="ROUND1_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round1_time": "2026-05-14 13:30",
+            "round1_confirm_status": "PENDING",
+            "round1_calendar_event_id": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--set", "round1_confirm_status=CONFIRMED",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("半确认状态", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_confirm_status"),
+            "PENDING")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid),
+            "ROUND1_SCHEDULING")
+
+    def test_allow_confirmed_when_stage_scheduled_and_event_id_present(self):
+        """正确闭环：stage→SCHEDULED + CONFIRMED + calendar_event_id 一次性写。"""
+        tid = _mk_talent(stage="ROUND1_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round1_time": "2026-05-14 13:30",
+            "round1_confirm_status": "PENDING",
+            "round1_calendar_event_id": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_SCHEDULED",
+            "--set", "round1_confirm_status=CONFIRMED",
+            "--set", "round1_calendar_event_id=evt_round1_123",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid),
+            "ROUND1_SCHEDULED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_confirm_status"),
+            "CONFIRMED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_calendar_event_id"),
+            "evt_round1_123")
+
+    def test_reject_scheduling_pending_with_calendar_event(self):
+        """v3.8.6：禁止 ROUND1_SCHEDULING + PENDING + 有 event_id 半排定状态。
+
+        事故触发：agent 建完日历后只跑
+        `--set round1_calendar_event_id=<event_id>`，却不 `--stage ROUND1_SCHEDULED`
+        / 不写 CONFIRMED，于是 DB 表达"仍等待确认"但日历邀请已发出。
+        """
+        tid = _mk_talent(stage="ROUND1_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round1_time": "2026-05-15 13:00",
+            "round1_confirm_status": "PENDING",
+            "round1_calendar_event_id": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--set", "round1_calendar_event_id=evt_created_123",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("半排定状态", err)
+        self.assertIsNone(
+            helpers.mem_tdb.get_talent_field(tid, "round1_calendar_event_id"))
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid),
+            "ROUND1_SCHEDULING")
+
+    def test_allow_fix_existing_scheduling_with_event_by_stage_upgrade(self):
+        """历史脏数据允许通过同一命令升级到 SCHEDULED 修复。"""
+        tid = _mk_talent(stage="ROUND1_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round1_time": "2026-05-15 13:00",
+            "round1_confirm_status": "PENDING",
+            "round1_calendar_event_id": "evt_existing_dirty",
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_SCHEDULED",
+            "--set", "round1_confirm_status=CONFIRMED",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid),
+            "ROUND1_SCHEDULED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round1_calendar_event_id"),
+            "evt_existing_dirty")
+
+    def test_reject_round2_scheduling_confirmed_without_calendar_event(self):
+        """二面同样禁止 ROUND2_SCHEDULING + CONFIRMED + 无 event_id。"""
+        tid = _mk_talent(stage="ROUND2_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round2_time": "2026-05-20 15:00",
+            "round2_confirm_status": "PENDING",
+            "round2_calendar_event_id": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--set", "round2_confirm_status=CONFIRMED",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("半确认状态", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round2_confirm_status"),
+            "PENDING")
+
+    def test_reject_round2_direct_schedule_from_exam_reviewed_even_force(self):
+        tid = _mk_talent(stage="EXAM_REVIEWED")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_time=2026-05-20 15:00",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--set", "round2_calendar_event_id=evt_round2_123",
+            "--force",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("拒绝直接确认二面", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "EXAM_REVIEWED")
+
+    def test_reject_round2_direct_schedule_from_round1_even_force(self):
+        tid = _mk_talent(stage="ROUND1_SCHEDULED")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_time=2026-05-20 15:00",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--set", "round2_calendar_event_id=evt_round2_123",
+            "--force",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("拒绝直接确认二面", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND1_SCHEDULED")
+
+    def test_reject_round2_direct_schedule_from_wait_return_even_force(self):
+        tid = _mk_talent(stage="WAIT_RETURN")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_time=2026-05-20 15:00",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--set", "round2_calendar_event_id=evt_round2_123",
+            "--force",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("拒绝直接确认二面", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "WAIT_RETURN")
+
+    def test_reject_round2_schedule_without_calendar_event(self):
+        tid = _mk_talent(stage="ROUND2_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round2_confirm_status": "PENDING",
+            "round2_calendar_event_id": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_time=2026-05-20 15:00",
+            "--set", "round2_confirm_status=CONFIRMED",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("round2_calendar_event_id", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND2_SCHEDULING")
+
+    def test_reject_round2_schedule_without_round2_time(self):
+        tid = _mk_talent(stage="ROUND2_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round2_confirm_status": "PENDING",
+            "round2_calendar_event_id": None,
+            "round2_time": None,
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--set", "round2_calendar_event_id=evt_round2_123",
+        ])
+        self.assertEqual(rc, 1, "stdout={} stderr={}".format(out, err))
+        self.assertIn("round2_time", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND2_SCHEDULING")
+
+    def test_allow_round2_confirm_chain_with_time_status_and_event(self):
+        tid = _mk_talent(stage="ROUND2_SCHEDULING")
+        helpers.mem_tdb._state["candidates"][tid].update({
+            "round2_confirm_status": "PENDING",
+            "round2_calendar_event_id": None,
+            "round2_time": "2026-05-20 15:00",
+        })
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND2_SCHEDULED",
+            "--set", "round2_time=2026-05-20 15:00",
+            "--set", "round2_confirm_status=CONFIRMED",
+            "--set", "round2_calendar_event_id=evt_round2_123",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stdout={} stderr={}".format(out, err))
+        result = json.loads(out)
+        self.assertEqual(result["transition"]["from"], "ROUND2_SCHEDULING")
+        self.assertEqual(result["transition"]["to"], "ROUND2_SCHEDULED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND2_SCHEDULED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round2_confirm_status"),
+            "CONFIRMED")
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_field(tid, "round2_calendar_event_id"),
+            "evt_round2_123")
+
     def test_set_invalid_format_rejected(self):
         tid = _mk_talent()
         out, err, rc = helpers.call_main("talent.cmd_update", [
@@ -524,6 +797,48 @@ class TestCmdUpdate(unittest.TestCase):
         self.assertEqual(rc, 1)
         # 来自 talent_db.get_talent_field 的白名单错误
         self.assertIn("白名单", err)
+
+    def test_no_show_stage_rejected_with_friendly_hint(self):
+        tid = _mk_talent(stage="ROUND1_SCHEDULED")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "ROUND1_NO_SHOW",
+            "--force",
+            "--reason", "boss said candidate no-show",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("ROUND1_NO_SHOW 不是合法 stage", err)
+        self.assertIn("rejection_no_show", err)
+        self.assertIn("interview.cmd_result", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND1_SCHEDULED")
+
+    def test_interview_stage_cannot_force_to_exam_reject_keep(self):
+        tid = _mk_talent(stage="ROUND1_SCHEDULED")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "EXAM_REJECT_KEEP",
+            "--force",
+            "--reason", "boss said candidate no-show",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("EXAM_REJECT_KEEP 只用于笔试", err)
+        self.assertIn("rejection_no_show", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND1_SCHEDULED")
+
+    def test_round2_stage_cannot_force_to_exam_reject_keep(self):
+        tid = _mk_talent(stage="ROUND2_SCHEDULED")
+        out, err, rc = helpers.call_main("talent.cmd_update", [
+            "--talent-id", tid,
+            "--stage", "EXAM_REJECT_KEEP",
+            "--force",
+            "--reason", "wrong keep-pool target",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("二面面试未通过但留池", err)
+        self.assertEqual(
+            helpers.mem_tdb.get_talent_current_stage(tid), "ROUND2_SCHEDULED")
 
     def test_legacy_field_value_still_works_with_warning(self):
         tid = _mk_talent()
@@ -577,6 +892,7 @@ class TestCmdDelete(unittest.TestCase):
         )
         out, err, rc = helpers.call_main("talent.cmd_delete", [
             "--talent-id", tid,
+            "--confirm-delete-talent", tid,
             "--reason", "二面未通过",
             "--json",
         ])
@@ -596,6 +912,7 @@ class TestCmdDelete(unittest.TestCase):
         tid = _mk_talent()
         out, err, rc = helpers.call_main("talent.cmd_delete", [
             "--talent-id", tid,
+            "--confirm-delete-talent", tid,
             "--reason", "脏数据",
             "--no-backup",
             "--json",
@@ -608,6 +925,7 @@ class TestCmdDelete(unittest.TestCase):
     def test_delete_missing_talent_raises(self):
         out, err, rc = helpers.call_main("talent.cmd_delete", [
             "--talent-id", "t_nope",
+            "--confirm-delete-talent", "t_nope",
             "--reason", "x",
         ])
         self.assertEqual(rc, 1)
@@ -617,6 +935,7 @@ class TestCmdDelete(unittest.TestCase):
         tid = _mk_talent()
         out, err, rc = helpers.call_main("talent.cmd_delete", [
             "--talent-id", tid,
+            "--confirm-delete-talent", tid,
             "--reason", "测试",
             "--dry-run",
             "--json",

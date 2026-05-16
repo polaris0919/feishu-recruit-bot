@@ -4,18 +4,36 @@
 - 使用 RealDictCursor 消除 row[N] 硬编码
 - 配置统一由 config.py 提供
 - schema 初始化：psql "$DATABASE_URL" -f lib/migrations/schema.sql
+
+B1 (v3.8.7) 进行中:
+  连接 / 低层 _query/_update / DBWriteError 已搬到 lib/db/connection.py;
+  本模块通过 re-export 保持 `_tdb._update(...)` 等 23 个 caller 的兼容。
+  剩余 candidate CRUD / events / emails 三块仍在本文件中, 等后续 sprint
+  评估再拆。详见 lib/db/__init__.py 模块文档。
 """
 import sys
 import json
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from lib import config as _cfg
-
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
+
+from lib import config as _cfg
+
+# B1: 低层从 lib/db/connection.py re-export (本模块仍是 23 个 caller 的入口)
+from lib.db.connection import (
+    DBWriteError,
+    _short_sql,
+    _is_enabled,
+    _conn_params,
+    _connect,
+    _update,
+    _query_one,
+    _query_all,
+)
+
 
 # ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
@@ -28,32 +46,6 @@ def _s(v, default=None):
     return s if s else default
 
 
-# ─── 连接管理 ─────────────────────────────────────────────────────────────────
-
-def _is_enabled():
-    return _cfg.db_enabled()
-
-
-def _conn_params():
-    # type: () -> dict
-    """Backward-compatible DB params helper for legacy callers."""
-    return _cfg.db_conn_params()
-
-
-@contextmanager
-def _connect():
-    """上下文管理器：获取连接，自动提交或回滚，最后关闭。"""
-    conn = psycopg2.connect(**_conn_params())
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
 # ─── 状态加载 ─────────────────────────────────────────────────────────────────
 
 _TALENT_FIELDS = [
@@ -61,11 +53,11 @@ _TALENT_FIELDS = [
     "wait_return_round",
     "exam_id",
     # 一面
-    "round1_confirm_status", "round1_time",
+    "round1_confirm_status", "round1_time", "round1_proposed_time",
     "round1_invite_sent_at", "round1_calendar_event_id",
     "round1_reminded_at", "round1_confirm_prompted_at",
     # 二面
-    "round2_confirm_status", "round2_time",
+    "round2_confirm_status", "round2_time", "round2_proposed_time",
     "round2_invite_sent_at", "round2_calendar_event_id",
     "round2_reminded_at", "round2_confirm_prompted_at",
     # 笔试
@@ -95,6 +87,7 @@ _TIMESTAMPTZ_ISO_KEYS = frozenset({
 # TIMESTAMPTZ 字段：以本地时间 "YYYY-MM-DD HH:MM" 格式返回（面试预约时间，用于展示）
 _TIMESTAMPTZ_LOCAL_KEYS = frozenset({
     "round1_time", "round2_time",
+    "round1_proposed_time", "round2_proposed_time",
 })
 
 
@@ -109,9 +102,28 @@ def _dt_to_local_str(val):
     return s[:16] if s else None
 
 
+_VALID_ROUND_NUMS = frozenset({1, 2})
+
+
+def _round_prefix(round_num):
+    # type: (int) -> str
+    """Return 'round1' / 'round2' 字段前缀, 不在白名单则 raise.
+
+    A1 (v3.8.6+): 本模块里有 ~9 处 SQL 字符串通过 .format(p=prefix) 注入
+    轮次前缀。当前 caller 都是 round_num=1/2 受控值,真 SQL 注入面 = 0。
+    但任何粗心 caller 把外部输入透传进 round_num 就开洞。统一从这里取
+    前缀,把"理论注入面"在入口截断。
+
+    选 frozenset 而不是 if-elif 是为了将来加 round3 / round4 时只改一行。
+    """
+    if round_num not in _VALID_ROUND_NUMS:
+        raise ValueError("非法 round_num: {!r}（必须是 1 或 2）".format(round_num))
+    return "round{}".format(round_num)
+
+
 def _round_time_key(round_num):
     # type: (int) -> str
-    return "round{}_time".format(round_num)
+    return "{}_time".format(_round_prefix(round_num))
 
 
 def _candidate_round_time(cand, round_num):
@@ -236,9 +248,9 @@ def _upsert_talent(cur, tid, cand):
         INSERT INTO talents (talent_id, candidate_email, candidate_name, current_stage,
             wait_return_round,
             exam_id,
-            round1_confirm_status, round1_time,
+            round1_confirm_status, round1_time, round1_proposed_time,
             round1_invite_sent_at, round1_calendar_event_id,
-            round2_confirm_status, round2_time,
+            round2_confirm_status, round2_time, round2_proposed_time,
             round2_invite_sent_at, round2_calendar_event_id,
             source, position, education, work_years, experience, school, phone, wechat,
             exam_sent_at, cv_path, has_cpp,
@@ -246,9 +258,9 @@ def _upsert_talent(cur, tid, cand):
         VALUES (%(tid)s, %(email)s, %(name)s, %(stage)s,
             %(wait_return_round)s,
             %(exam_id)s,
-            %(r1_status)s, %(r1_time)s,
+            %(r1_status)s, %(r1_time)s, %(r1_proposed_time)s,
             %(r1_invite_sent_at)s, %(r1_cal_eid)s,
-            %(r2_status)s, %(r2_time)s,
+            %(r2_status)s, %(r2_time)s, %(r2_proposed_time)s,
             %(r2_invite_sent_at)s, %(r2_cal_eid)s,
             %(source)s, %(position)s, %(education)s, %(work_years)s, %(experience)s,
             %(school)s, %(phone)s, %(wechat)s,
@@ -262,10 +274,12 @@ def _upsert_talent(cur, tid, cand):
             exam_id = EXCLUDED.exam_id,
             round1_confirm_status = EXCLUDED.round1_confirm_status,
             round1_time = EXCLUDED.round1_time,
+            round1_proposed_time = EXCLUDED.round1_proposed_time,
             round1_invite_sent_at = EXCLUDED.round1_invite_sent_at,
             round1_calendar_event_id = EXCLUDED.round1_calendar_event_id,
             round2_confirm_status = EXCLUDED.round2_confirm_status,
             round2_time = EXCLUDED.round2_time,
+            round2_proposed_time = EXCLUDED.round2_proposed_time,
             round2_invite_sent_at = EXCLUDED.round2_invite_sent_at,
             round2_calendar_event_id = EXCLUDED.round2_calendar_event_id,
             source = EXCLUDED.source,
@@ -288,11 +302,13 @@ def _upsert_talent(cur, tid, cand):
         "wait_return_round": cand.get("wait_return_round"),
         "exam_id": cand.get("exam_id"),
         "r1_status": cand.get("round1_confirm_status") or "UNSET",
-        "r1_time": _candidate_round_time(cand, 1),
+        "r1_time": cand.get("round1_time"),
+        "r1_proposed_time": cand.get("round1_proposed_time"),
         "r1_invite_sent_at": cand.get("round1_invite_sent_at"),
         "r1_cal_eid": cand.get("round1_calendar_event_id"),
         "r2_status": cand.get("round2_confirm_status") or "UNSET",
-        "r2_time": _candidate_round_time(cand, 2),
+        "r2_time": cand.get("round2_time"),
+        "r2_proposed_time": cand.get("round2_proposed_time"),
         "r2_invite_sent_at": cand.get("round2_invite_sent_at"),
         "r2_cal_eid": cand.get("round2_calendar_event_id"),
         "source": cand.get("source"),
@@ -311,7 +327,7 @@ def _upsert_talent(cur, tid, cand):
 
 def _round_confirmation_candidates(round_num, confirmed):
     # type: (int, bool) -> List[Dict[str, Any]]
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     stage = (
         "ROUND1_SCHEDULED" if round_num == 1 else "ROUND2_SCHEDULED"
     ) if confirmed else (
@@ -342,17 +358,23 @@ def _round_confirmation_candidates(round_num, confirmed):
 
 def _insert_events(cur, tid, audit):
     # type: (Any, str, list) -> None
+    """v3.8.5：单条 INSERT 失败 → raise DBWriteError，让外层事务回滚。
+
+    ON CONFLICT DO NOTHING 已经吞掉 unique 冲突；走到 except 一定是真的
+    DB 抖动 / 权限 / schema 不匹配（如 v3.5.11 那次 chk_te_context 漏值），
+    必须捅破链路，不能 print 后继续给 caller 一个虚假的"成功"。
+    """
     for entry in (audit or []):
         event_id, at_str, actor, action, payload = _event_values(tid, entry)
+        sql = (
+            "INSERT INTO talent_events (event_id, talent_id, at, actor, action, payload) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (event_id) DO NOTHING"
+        )
         try:
-            cur.execute(
-                "INSERT INTO talent_events (event_id, talent_id, at, actor, action, payload) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (event_id) DO NOTHING",
-                (event_id, tid, at_str, actor, action, Json(payload)),
-            )
+            cur.execute(sql, (event_id, tid, at_str, actor, action, Json(payload)))
         except Exception as e:
-            print("[talent_db] 插入事件失败: {}".format(e), file=sys.stderr)
+            raise DBWriteError(_short_sql(sql), e)
 
 
 def sync_state_to_db(state):
@@ -369,6 +391,9 @@ def sync_state_to_db(state):
     candidates = state.get("candidates") or {}
     if not candidates:
         return False
+    # v3.8.5：DB 异常 → 包装成 DBWriteError 上抛，由 cli_wrapper 飞书告警。
+    # 之前是 print stderr + return False，多 caller 不检查返回值，会出现
+    # "状态未同步但流程继续"，正是 INCIDENT_RULES §15 同款根因。
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -379,9 +404,10 @@ def sync_state_to_db(state):
                     _upsert_talent(cur, tid, cand)
                     _insert_events(cur, tid, cand.get("audit") or [])
         return True
+    except DBWriteError:
+        raise
     except Exception as e:
-        print("[talent_db] sync_state_to_db 失败: {}".format(e), file=sys.stderr)
-        return False
+        raise DBWriteError("sync_state_to_db", e)
 
 
 # ─── 单记录读写（供 core_state.load_candidate / save_candidate 使用）──────────
@@ -414,7 +440,10 @@ def get_one(talent_id):
 
 def upsert_one(talent_id, cand):
     # type: (str, Dict[str, Any]) -> None
-    """将单个候选人 upsert 到 DB（含 audit 事件）。"""
+    """将单个候选人 upsert 到 DB（含 audit 事件）。
+
+    v3.8.5：DB 异常 → 上抛 DBWriteError，不再静默吞。
+    """
     if not _is_enabled():
         return
     try:
@@ -430,63 +459,16 @@ def upsert_one(talent_id, cand):
             with conn.cursor() as cur:
                 _upsert_talent(cur, talent_id, cand)
                 _insert_events(cur, talent_id, cand.get("audit") or [])
+    except DBWriteError:
+        raise
     except Exception as e:
-        print("[talent_db] upsert_one 失败: {}".format(e), file=sys.stderr)
-
-
-# ─── 单条操作 ─────────────────────────────────────────────────────────────────
-
-def _update(sql, params):
-    # type: (str, tuple) -> bool
-    if not _is_enabled():
-        return False
-    try:
-        from lib.side_effect_guard import db_writes_disabled
-        if db_writes_disabled():
-            preview = " ".join(str(sql).split())[:160]
-            print("[talent_db][dry-run] 跳过 _update: {}".format(preview), file=sys.stderr)
-            return True
-    except ImportError:
-        pass
-    try:
-        with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-        return True
-    except Exception as e:
-        print("[talent_db] UPDATE 失败: {}".format(e), file=sys.stderr)
-        return False
-
-
-def _query_one(sql, params=()):
-    # type: (str, tuple) -> Optional[dict]
-    if not _is_enabled():
-        return None
-    try:
-        with _connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(sql, params)
-                return cur.fetchone()
-    except Exception as e:
-        print("[talent_db] QUERY 失败: {}".format(e), file=sys.stderr)
-        return None
-
-
-def _query_all(sql, params=()):
-    # type: (str, tuple) -> List[dict]
-    if not _is_enabled():
-        return []
-    try:
-        with _connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(sql, params)
-                return cur.fetchall()
-    except Exception as e:
-        print("[talent_db] QUERY 失败: {}".format(e), file=sys.stderr)
-        return []
+        raise DBWriteError("upsert_one talent_id={}".format(talent_id), e)
 
 
 # ─── 候选人 CRUD ──────────────────────────────────────────────────────────────
+# 注: _update / _query_one / _query_all / _connect / DBWriteError / _short_sql
+#     / _is_enabled / _conn_params 在 B1 (v3.8.7) 移到 lib/db/connection.py,
+#     由本模块顶部 re-export 注入本 namespace。
 
 def delete_talent(talent_id):
     # type: (str) -> bool
@@ -521,9 +503,10 @@ def mark_round1_reminded(talent_id):
     _update("UPDATE talents SET round1_reminded_at = NOW() WHERE talent_id = %s", (talent_id,))
 
 
-def _parse_pending_reminders(rows, time_key):
-    # type: (list, str) -> List[Dict[str, Any]]
+def _parse_pending_reminders(rows, time_key, reminded_key, duration_minutes, buffer_minutes=15, repeat_minutes=30):
+    # type: (list, str, str, int, int, int) -> List[Dict[str, Any]]
     results = []
+    now = datetime.now()
     for r in rows:
         val = r.get(time_key)
         if not val:
@@ -538,14 +521,34 @@ def _parse_pending_reminders(rows, time_key):
                 if not time_str:
                     continue
                 dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-            elapsed = (datetime.now() - dt).total_seconds() / 60
-            if elapsed >= 1:
+            elapsed = (now - dt).total_seconds() / 60
+            eligible_after = duration_minutes + buffer_minutes
+            if elapsed >= eligible_after:
+                reminded_at = r.get(reminded_key)
+                minutes_since_reminder = None
+                if reminded_at:
+                    if hasattr(reminded_at, "timestamp"):
+                        reminded_dt = datetime.fromtimestamp(reminded_at.timestamp())
+                    else:
+                        reminded_s = str(reminded_at).strip()
+                        reminded_dt = datetime.fromisoformat(reminded_s.replace("Z", "+00:00"))
+                        if getattr(reminded_dt, "tzinfo", None) is not None:
+                            reminded_dt = datetime.fromtimestamp(reminded_dt.timestamp())
+                    minutes_since_reminder = (now - reminded_dt).total_seconds() / 60
+                    if minutes_since_reminder < repeat_minutes:
+                        continue
                 results.append({
                     "talent_id": r["talent_id"],
                     "candidate_name": r.get("candidate_name") or "",
                     "candidate_email": r.get("candidate_email") or "",
                     time_key: time_str,
                     "elapsed_minutes": int(elapsed),
+                    "minutes_since_reminder": (
+                        None if minutes_since_reminder is None else int(minutes_since_reminder)
+                    ),
+                    "duration_minutes": duration_minutes,
+                    "buffer_minutes": buffer_minutes,
+                    "repeat_minutes": repeat_minutes,
                 })
         except Exception:
             continue
@@ -554,26 +557,24 @@ def _parse_pending_reminders(rows, time_key):
 
 def get_pending_round1_reminders():
     rows = _query_all("""
-        SELECT talent_id, candidate_name, candidate_email, round1_time
+        SELECT talent_id, candidate_name, candidate_email, round1_time, round1_reminded_at
         FROM talents
         WHERE current_stage = 'ROUND1_SCHEDULED'
-          AND round1_reminded_at IS NULL
           AND round1_confirm_status = 'CONFIRMED'
           AND round1_time IS NOT NULL
     """)
-    return _parse_pending_reminders(rows, "round1_time")
+    return _parse_pending_reminders(rows, "round1_time", "round1_reminded_at", 30)
 
 
 def get_pending_interview_reminders():
     rows = _query_all("""
-        SELECT talent_id, candidate_name, candidate_email, round2_time
+        SELECT talent_id, candidate_name, candidate_email, round2_time, round2_reminded_at
         FROM talents
         WHERE current_stage = 'ROUND2_SCHEDULED'
-          AND round2_reminded_at IS NULL
           AND round2_confirm_status = 'CONFIRMED'
           AND round2_time IS NOT NULL
     """)
-    return _parse_pending_reminders(rows, "round2_time")
+    return _parse_pending_reminders(rows, "round2_time", "round2_reminded_at", 60)
 
 
 # ─── 笔试预审（v3.5 已下架，原 save_exam_prereview helper 同步删除）──────────
@@ -626,7 +627,7 @@ def save_exam_ai_review(talent_id, ai_result, actor="system"):
 def save_invite_info(talent_id, round_num, calendar_event_id=None):
     # type: (str, int, Optional[str]) -> None
     """记录面试邀请发出时间，状态设为 PENDING，round_num=1 或 2。"""
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     if calendar_event_id:
         _update(
             "UPDATE talents SET {p}_invite_sent_at = NOW(), "
@@ -646,7 +647,7 @@ def save_invite_info(talent_id, round_num, calendar_event_id=None):
 def mark_confirmed(talent_id, round_num, auto=False):
     # type: (str, int, bool) -> None
     """标记面试已确认：只更新 confirm_status，不复制第二份时间。"""
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     sql = "UPDATE talents SET {p}_confirm_status = 'CONFIRMED'".format(p=prefix)
     if round_num == 1:
         sql += ", current_stage = 'ROUND1_SCHEDULED', wait_return_round = NULL"
@@ -658,20 +659,20 @@ def mark_confirmed(talent_id, round_num, auto=False):
 
 def update_calendar_event_id(talent_id, round_num, event_id):
     # type: (str, int, str) -> None
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     _update("UPDATE talents SET {}_calendar_event_id = %s WHERE talent_id = %s".format(prefix),
             (event_id, talent_id))
 
 
 def clear_calendar_event_id(talent_id, round_num):
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     _update("UPDATE talents SET {}_calendar_event_id = NULL WHERE talent_id = %s".format(prefix),
             (talent_id,))
 
 
 def clear_round_followup_fields(talent_id, round_num):
     # type: (str, int) -> None
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     _update(
         "UPDATE talents SET {p}_confirm_prompted_at = NULL, {p}_reminded_at = NULL "
         "WHERE talent_id = %s".format(p=prefix),
@@ -680,7 +681,7 @@ def clear_round_followup_fields(talent_id, round_num):
 
 
 def reset_round_scheduling_tracking(talent_id, round_num):
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     _update(
         "UPDATE talents SET {p}_confirm_status = 'UNSET', "
         "{p}_time = NULL, "
@@ -711,7 +712,7 @@ def get_confirmed_candidates(round_num):
 
 def mark_reschedule_pending(talent_id, round_num):
     """候选人申请改期：撤销确认状态 → PENDING，清除日历事件 ID。"""
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     stage = "ROUND1_SCHEDULING" if round_num == 1 else "ROUND2_SCHEDULING"
     _update(
         "UPDATE talents SET current_stage = %s, {p}_confirm_status = 'PENDING', "
@@ -731,7 +732,7 @@ def migrate_round2_pending_stage():
 
 def mark_wait_return(talent_id, round_num):
     # type: (str, int) -> None
-    prefix = "round{}".format(round_num)
+    prefix = _round_prefix(round_num)
     _update(
         "UPDATE talents SET current_stage = 'WAIT_RETURN', wait_return_round = %s, "
         "{p}_confirm_status = 'UNSET', {p}_time = NULL, "
@@ -763,10 +764,11 @@ def resume_wait_return(talent_id):
 def set_boss_confirm_pending(talent_id, round_num, proposed_time):
     # type: (str, int, str) -> None
     """记录待老板确认的时间，状态置为 PENDING。"""
+    p = _round_prefix(round_num)
     _update(
-        "UPDATE talents SET round{n}_time = %s, "
-        "round{n}_confirm_status = 'PENDING', round{n}_confirm_prompted_at = NOW() "
-        "WHERE talent_id = %s".format(n=round_num),
+        "UPDATE talents SET {p}_time = %s, "
+        "{p}_confirm_status = 'PENDING', {p}_confirm_prompted_at = NOW() "
+        "WHERE talent_id = %s".format(p=p),
         (proposed_time, talent_id),
     )
 
@@ -774,18 +776,18 @@ def set_boss_confirm_pending(talent_id, round_num, proposed_time):
 def get_boss_confirm_pending(talent_id, round_num):
     # type: (str, int) -> Dict[str, Any]
     """查询某轮次是否有待老板确认的时间。"""
+    p = _round_prefix(round_num)
     empty = {"pending": False, "time": None, "prompt_at": None}
     row = _query_one(
-        "SELECT round{n}_time, round{n}_confirm_status, "
-        "round{n}_confirm_prompted_at "
-        "FROM talents WHERE talent_id = %s".format(n=round_num),
+        "SELECT {p}_time, {p}_confirm_status, {p}_confirm_prompted_at "
+        "FROM talents WHERE talent_id = %s".format(p=p),
         (talent_id,),
     )
     if not row:
         return empty
-    status = _s(row.get("round{}_confirm_status".format(round_num)), "UNSET")
-    prompted = row.get("round{}_confirm_prompted_at".format(round_num))
-    current_time = _dt_to_local_str(row.get("round{}_time".format(round_num)))
+    status = _s(row.get("{}_confirm_status".format(p)), "UNSET")
+    prompted = row.get("{}_confirm_prompted_at".format(p))
+    current_time = _dt_to_local_str(row.get("{}_time".format(p)))
     return {
         "time": current_time,
         "proposed_time": current_time,
@@ -796,9 +798,10 @@ def get_boss_confirm_pending(talent_id, round_num):
 
 def clear_boss_confirm_pending(talent_id, round_num):
     """清除催促时间戳（确认动作本身由 mark_confirmed / cmd_reschedule 完成）。"""
+    p = _round_prefix(round_num)
     _update(
-        "UPDATE talents SET round{n}_confirm_prompted_at = NULL "
-        "WHERE talent_id = %s".format(n=round_num),
+        "UPDATE talents SET {p}_confirm_prompted_at = NULL "
+        "WHERE talent_id = %s".format(p=p),
         (talent_id,),
     )
 
@@ -1199,7 +1202,8 @@ def list_unanalyzed_inbound(limit=50):
     sql = (
         "SELECT e.email_id, e.talent_id, e.message_id, e.subject, e.sender, "
         "       e.sent_at, e.context, e.stage_at_receipt, e.body_full, "
-        "       e.body_excerpt, t.candidate_name, t.current_stage "
+        "       e.body_excerpt, e.attachments, t.candidate_name, t.current_stage, "
+        "       t.round1_time, t.round2_time "
         "FROM talent_emails e "
         "LEFT JOIN talents t ON e.talent_id = t.talent_id "
         "WHERE e.direction = 'inbound' AND e.analyzed_at IS NULL "
@@ -1332,6 +1336,7 @@ _TALENT_UPDATABLE_FIELDS = frozenset({
     "has_cpp",
     "wait_return_round", "exam_id",
     "round1_time", "round2_time",
+    "round1_proposed_time", "round2_proposed_time",
     "round1_invite_sent_at", "round2_invite_sent_at",
     "round1_calendar_event_id", "round2_calendar_event_id",
     "round1_confirm_status", "round2_confirm_status",

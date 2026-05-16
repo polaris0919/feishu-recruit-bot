@@ -81,6 +81,10 @@ from lib.self_verify import assert_talent_state
 #     talent_db.delete_talent()，不再经停任何 stage。
 #   - ROUND2_SCHEDULED → OFFER_HANDOFF → POST_OFFER_FOLLOWUP 合并为
 #     ROUND2_SCHEDULED → POST_OFFER_FOLLOWUP 一步。
+# v3.8.2 (2026-05-11) 拆桶：
+#   - POST_OFFER_FOLLOWUP → OFFER_DECLINED_KEEP 加入白名单：候选人拒 offer 但留池
+#     是 §4.13 POST_OFFER_FOLLOWUP 分支的合理下一站，不再需要 --force。
+#     ROUND2_DONE_REJECT_KEEP 严格只承载 ROUND2_SCHEDULED → reject_keep 一条入边。
 _NATURAL_TRANSITIONS = frozenset({
     # 入库 → 一面
     ("NEW",                       "ROUND1_SCHEDULING"),
@@ -96,7 +100,7 @@ _NATURAL_TRANSITIONS = frozenset({
 
     # 笔试流程
     ("EXAM_SENT",                 "EXAM_REVIEWED"),
-    ("EXAM_SENT",                 "EXAM_REJECT_KEEP"),           # 笔试不答自动拒留池
+    ("EXAM_SENT",                 "EXAM_REJECT_KEEP"),           # 人工笔试不过留池 / 历史兼容；cron 自动拒 v3.8.3 起物理删档
     ("EXAM_REVIEWED",             "ROUND2_SCHEDULING"),          # 笔试通过 → 二面
     ("EXAM_REVIEWED",             "EXAM_REJECT_KEEP"),
 
@@ -107,10 +111,17 @@ _NATURAL_TRANSITIONS = frozenset({
     ("ROUND2_SCHEDULED",          "ROUND2_DONE_REJECT_KEEP"),
     ("ROUND2_SCHEDULED",          "WAIT_RETURN"),
 
+    # v3.8 (2026-05-10)：入职完成胜利收尾
+    ("POST_OFFER_FOLLOWUP",       "ONBOARDED"),
+    # v3.8.2 (2026-05-11)：候选人拒 offer 留池
+    ("POST_OFFER_FOLLOWUP",       "OFFER_DECLINED_KEEP"),
+
     # WAIT_RETURN 出口（按 wait_return_round 决定）
     ("WAIT_RETURN",               "ROUND1_SCHEDULING"),
     ("WAIT_RETURN",               "ROUND2_SCHEDULING"),
 })
+
+_NO_SHOW_STAGE_HINTS = frozenset({"ROUND1_NO_SHOW", "ROUND2_NO_SHOW"})
 
 
 def _is_natural(from_stage, to_stage):
@@ -194,6 +205,187 @@ def _parse_set_pairs(set_pairs):
     return pairs
 
 
+def _project_field(snap, set_pairs, field):
+    # type: (Dict[str, Any], List[Tuple[str, Any]], str) -> Any
+    """返回本次 cmd_update 执行后某字段的预计值。"""
+    value = snap.get(field)
+    for key, new_value in set_pairs:
+        if key == field:
+            value = new_value
+    return value
+
+
+def _dirty_scheduling_confirmed_without_event(stage, confirm_status, event_id):
+    # type: (str, Any, Any) -> bool
+    """是否为 ROUND{N}_SCHEDULING + CONFIRMED + 无 calendar_event_id 的半确认状态。"""
+    return (
+        stage in ("ROUND1_SCHEDULING", "ROUND2_SCHEDULING")
+        and confirm_status == "CONFIRMED"
+        and not event_id
+    )
+
+
+def _dirty_scheduling_with_event(stage, event_id):
+    # type: (str, Any) -> bool
+    """是否为 ROUND{N}_SCHEDULING + 已有 calendar_event_id 的半排定状态。"""
+    return (
+        stage in ("ROUND1_SCHEDULING", "ROUND2_SCHEDULING")
+        and bool(event_id)
+    )
+
+
+def _validate_no_new_scheduling_confirmed_without_event(snap, set_pairs, transition_info):
+    # type: (Dict[str, Any], List[Tuple[str, Any]], Optional[Dict[str, Any]]) -> None
+    """阻止新制造 SCHEDULING + CONFIRMED + no event_id 的脏状态。
+
+    正确闭环是 §4.2：先建日历，再一次性
+      --stage ROUND{N}_SCHEDULED
+      --set round{N}_confirm_status=CONFIRMED
+      --set round{N}_calendar_event_id=<event_id>
+
+    历史脏数据不在这里强行封死；如果当前已经脏，允许运维用 cmd_update 补 event_id
+    或改 stage 去修复。这里只拦"本次命令从非脏 → 脏"。
+    """
+    current_stage = snap.get("current_stage") or snap.get("stage") or "NEW"
+    final_stage = transition_info["to"] if transition_info else current_stage
+
+    for round_num in (1, 2):
+        sched_stage = "ROUND{}_SCHEDULING".format(round_num)
+        confirm_field = "round{}_confirm_status".format(round_num)
+        event_field = "round{}_calendar_event_id".format(round_num)
+
+        before_dirty = _dirty_scheduling_confirmed_without_event(
+            current_stage,
+            snap.get(confirm_field),
+            snap.get(event_field),
+        )
+        after_dirty = _dirty_scheduling_confirmed_without_event(
+            final_stage,
+            _project_field(snap, set_pairs, confirm_field),
+            _project_field(snap, set_pairs, event_field),
+        )
+
+        if after_dirty and not before_dirty:
+            raise UserInputError(
+                "拒绝制造半确认状态：{} + {}=CONFIRMED + {} 为空。"
+                "候选人确认后应先建日历，再一次性执行 "
+                "--stage ROUND{}_SCHEDULED --set {}=CONFIRMED "
+                "--set {}=<event_id>。如果只是发邀请等待候选人确认，"
+                "请写 {}=PENDING。".format(
+                    sched_stage,
+                    confirm_field,
+                    event_field,
+                    round_num,
+                    confirm_field,
+                    event_field,
+                    confirm_field,
+                )
+            )
+
+
+def _validate_no_new_scheduling_with_event(snap, set_pairs, transition_info):
+    # type: (Dict[str, Any], List[Tuple[str, Any]], Optional[Dict[str, Any]]) -> None
+    """阻止新制造 SCHEDULING + 有 calendar_event_id 的脏状态。
+
+    日历事件一旦创建, 就已经给候选人 / 面试官 / 老板发出最终参会邀请；
+    DB 不应继续表达"等待候选人确认"。正确闭环必须一次性升级到 SCHEDULED
+    并写 CONFIRMED + event_id。
+
+    历史脏数据允许通过同一条 cmd_update 加 --stage ROUND{N}_SCHEDULED 修复；
+    这里只拦"本次命令从非脏 → 脏"。
+    """
+    current_stage = snap.get("current_stage") or snap.get("stage") or "NEW"
+    final_stage = transition_info["to"] if transition_info else current_stage
+
+    for round_num in (1, 2):
+        event_field = "round{}_calendar_event_id".format(round_num)
+        confirm_field = "round{}_confirm_status".format(round_num)
+
+        before_dirty = _dirty_scheduling_with_event(
+            current_stage, snap.get(event_field))
+        after_event_id = _project_field(snap, set_pairs, event_field)
+        after_dirty = _dirty_scheduling_with_event(final_stage, after_event_id)
+
+        if after_dirty and not before_dirty:
+            raise UserInputError(
+                "拒绝制造半排定状态：{} + {}={!r}。日历已创建时必须一次性"
+                "升级到 ROUND{}_SCHEDULED，并写 {}=CONFIRMED；正确命令形如："
+                "--stage ROUND{}_SCHEDULED --set {}=CONFIRMED "
+                "--set {}=<event_id>。".format(
+                    final_stage,
+                    event_field,
+                    after_event_id,
+                    round_num,
+                    confirm_field,
+                    round_num,
+                    confirm_field,
+                    event_field,
+                )
+            )
+
+
+def _validate_round2_scheduled_requires_confirm_chain(snap, set_pairs, transition_info):
+    # type: (Dict[str, Any], List[Tuple[str, Any]], Optional[Dict[str, Any]]) -> None
+    """二面最终确认必须只从 ROUND2_SCHEDULING 经 §4.2 链路进入。
+
+    老板第一次给出的二面时间只是候选人邀请时间；不论上游是笔试通过、
+    一面后跳过笔试直进二面、WAIT_RETURN 回归还是人工恢复，都必须先进入
+    ROUND2_SCHEDULING，等候选人 confirm 后再由老板显式授权建日历。
+    """
+    if not transition_info or transition_info.get("to") != "ROUND2_SCHEDULED":
+        return
+
+    from_stage = transition_info.get("from") or ""
+    if from_stage != "ROUND2_SCHEDULING":
+        raise UserInputError(
+            "拒绝直接确认二面：{} → ROUND2_SCHEDULED 不允许。"
+            "二面时间确认必须先进入 ROUND2_SCHEDULING，发送二面邀请，"
+            "等候选人回信确认后由老板飞书明确授权建日历。".format(from_stage)
+        )
+
+    final_status = _project_field(snap, set_pairs, "round2_confirm_status")
+    final_event_id = _project_field(snap, set_pairs, "round2_calendar_event_id")
+    final_time = _project_field(snap, set_pairs, "round2_time")
+    missing = []
+    if final_status != "CONFIRMED":
+        missing.append("round2_confirm_status=CONFIRMED")
+    if not final_event_id:
+        missing.append("round2_calendar_event_id=<event_id>")
+    if not final_time:
+        missing.append("round2_time=<confirmed_time>")
+    if missing:
+        raise UserInputError(
+            "拒绝不完整的二面确认：进入 ROUND2_SCHEDULED 必须一次性写入 {}。"
+            "正确链路是先 feishu.cmd_calendar_create，再 talent.cmd_update "
+            "--stage ROUND2_SCHEDULED --set round2_confirm_status=CONFIRMED "
+            "--set round2_calendar_event_id=<event_id> --set round2_time=<confirmed_time>。".format(
+                "、".join(missing)
+            )
+        )
+
+
+def _validate_exam_reject_keep_not_for_interview_stage(snap, transition_info):
+    # type: (Dict[str, Any], Optional[Dict[str, Any]]) -> None
+    """阻止 agent 把面试 no-show / 面试失败误塞进 EXAM_REJECT_KEEP。
+
+    EXAM_REJECT_KEEP 只承载笔试未通过或指定撤回/暂缓留池语义；
+    一面/二面阶段的问题应走 interview.cmd_result 或 no-show 专用链路。
+    """
+    if not transition_info or transition_info.get("to") != "EXAM_REJECT_KEEP":
+        return
+    from_stage = transition_info.get("from") or ""
+    if from_stage.startswith("ROUND1_") or from_stage.startswith("ROUND2_"):
+        raise UserInputError(
+            "拒绝 {} → EXAM_REJECT_KEEP：EXAM_REJECT_KEEP 只用于笔试未通过/指定留池，"
+            "不能承载一面/二面 no-show 或面试阶段结果。"
+            "一面/二面 no-show 请走 AGENT_RULES.md §4.14：重排，或先发送 "
+            "rejection_no_show，再执行 interview.cmd_result --round N --result "
+            "reject_delete --confirm-reject-delete <talent_id> --skip-email。"
+            "二面面试未通过但留池请用 interview.cmd_result --round 2 --result reject_keep。".format(
+                from_stage)
+        )
+
+
 # ─── 主流程 ──────────────────────────────────────────────────────────────────
 
 def _do_update(args):
@@ -225,6 +417,16 @@ def _do_update(args):
     forced = False
     if args.stage:
         new_stage = args.stage
+        if new_stage in _NO_SHOW_STAGE_HINTS:
+            round_num = 1 if new_stage.startswith("ROUND1_") else 2
+            raise UserInputError(
+                "{stage} 不是合法 stage；no-show 不落库为候选人阶段。"
+                "请走 AGENT_RULES.md §4.14：先发送 rejection_no_show，"
+                "再执行 interview.cmd_result --talent-id {tid} --round {round_num} "
+                "--result reject_delete --confirm-reject-delete {tid} --skip-email；"
+                "如果老板愿意重排，则走改期 chain 回到 ROUND{round_num}_SCHEDULING。".format(
+                    stage=new_stage, tid=talent_id, round_num=round_num)
+            )
         if new_stage == current_stage:
             print("[cmd_update] stage unchanged ({} == {})；no-op".format(
                 current_stage, new_stage), file=sys.stderr)
@@ -247,6 +449,17 @@ def _do_update(args):
             raise UserInputError(
                 "字段 {!r} 不在白名单。current_stage 请用 --stage；"
                 "其他字段需要先添加到 lib/talent_db.py 的 _TALENT_UPDATABLE_FIELDS。".format(field))
+
+    # v3.8.6：防止 agent 只把 confirm_status 改成 CONFIRMED，却没有建日历 /
+    # 没有把 stage 升级到 SCHEDULED，留下 SCHEDULING + CONFIRMED + no event_id。
+    _validate_no_new_scheduling_confirmed_without_event(
+        snap, set_pairs, transition_info)
+    _validate_no_new_scheduling_with_event(
+        snap, set_pairs, transition_info)
+    _validate_round2_scheduled_requires_confirm_chain(
+        snap, set_pairs, transition_info)
+    _validate_exam_reject_keep_not_for_interview_stage(
+        snap, transition_info)
 
     # ── 字段变更摘要 ──
     field_changes = []  # type: List[Dict[str, Any]]

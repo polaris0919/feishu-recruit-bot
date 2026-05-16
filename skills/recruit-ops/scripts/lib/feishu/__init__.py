@@ -4,13 +4,16 @@
 基于官方 lark-oapi SDK（pip install lark-oapi）。
 """
 import json
+import mimetypes
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 from lark_oapi.api.calendar.v4 import (
+    Attachment,
     CreateCalendarEventRequest,
     DeleteCalendarEventRequest,
     CreateCalendarEventAttendeeRequest,
@@ -18,6 +21,10 @@ from lark_oapi.api.calendar.v4 import (
     CalendarEvent,
     CalendarEventAttendee,
     TimeInfo,
+)
+from lark_oapi.api.drive.v1 import (
+    UploadAllMediaRequest,
+    UploadAllMediaRequestBody,
 )
 
 from lib import config as _cfg
@@ -116,6 +123,13 @@ def send_text_to_hr(text):
     return send_text(text, open_id=feishu.get("hr_open_id", ""))
 
 
+def send_text_to_polaris(text):
+    # type: (str) -> bool
+    feishu = _cfg.get("feishu")
+    return send_text(text, open_id=(
+        feishu.get("polaris_open_id", "") or feishu.get("scheduler_open_id", "")))
+
+
 # ─── v3.5.7：三位一面面试官 sink wrapper ─────────────────────────────────────
 # 用于 §5.11 一面派单（HR 触发）。每个 wrapper 是 send_text 的薄封装，
 # 唯一职责是把 lib.config 里对应的 open_id 找出来透传。
@@ -174,6 +188,104 @@ def _parse_time_to_timestamp(time_str, duration_minutes=60):
     raise ValueError("无法解析时间格式: " + time_str)
 
 
+# drive.v1.media.upload_all 全量上传单文件上限 20MB；日程附件总量限制另有 25MB。
+_CALENDAR_ATTACHMENT_LIMIT_BYTES = 20 * 1024 * 1024
+
+
+def _lookup_candidate_cv_path(talent_id):
+    # type: (str) -> str
+    try:
+        from lib import talent_db as _tdb
+        if not _tdb._is_enabled():
+            return ""
+        return (_tdb.get_talent_field(talent_id, "cv_path") or "").strip()
+    except Exception as e:
+        print("[feishu] 查询候选人 CV 路径失败: {}".format(e), file=sys.stderr)
+        return ""
+
+
+def _find_candidate_cv_file(talent_id):
+    # type: (str) -> tuple
+    """返回 (Path|None, status_source)。优先 DB cv_path，缺失时扫候选人 cv/ 目录。"""
+    cv_path = _lookup_candidate_cv_path(talent_id)
+    if cv_path:
+        path = Path(cv_path).expanduser()
+        try:
+            path = path.resolve()
+        except OSError:
+            pass
+        return path, "cv_path"
+
+    try:
+        from lib.candidate_storage import cv_dir
+        base = cv_dir(talent_id)
+        if base.is_dir():
+            candidates = [
+                p for p in base.iterdir()
+                if p.is_file() and p.suffix.lower() in (".pdf", ".docx")
+            ]
+            if candidates:
+                candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                return candidates[0].resolve(), "cv_dir"
+    except Exception as e:
+        print("[feishu] 扫描候选人 CV 目录失败: {}".format(e), file=sys.stderr)
+    return None, "missing"
+
+
+def _upload_calendar_attachment(client, calendar_id, file_path):
+    # type: (object, str, Path) -> str
+    """上传日程附件素材，返回 file_token。"""
+    mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    extra = {"mime_type": mime_type}
+    with open(str(file_path), "rb") as f:
+        req = UploadAllMediaRequest.builder() \
+            .request_body(UploadAllMediaRequestBody.builder()
+                .file_name(file_path.name)
+                .parent_type("calendar")
+                .parent_node(calendar_id)
+                .size(file_path.stat().st_size)
+                .file(f)
+                .extra(json.dumps(extra, ensure_ascii=False))
+                .build()) \
+            .build()
+        resp = client.drive.v1.media.upload_all(req)
+    if not resp.success():
+        raise RuntimeError("上传日程附件失败: code={} msg={}".format(resp.code, resp.msg))
+    token = getattr(resp.data, "file_token", "") if resp.data else ""
+    if not token:
+        raise RuntimeError("上传日程附件成功但未返回 file_token")
+    return token
+
+
+def _prepare_cv_calendar_attachment(client, calendar_id, talent_id, enabled=True):
+    # type: (object, str, str, bool) -> tuple
+    """尽力把候选人 CV 上传成日程附件，返回 (attachments, status_line)。"""
+    if not enabled:
+        return [], "CV附件：已关闭"
+    path, source = _find_candidate_cv_file(talent_id)
+    if path is None:
+        return [], "CV附件：未找到 cv_path 或 candidates/<tid>/cv 文件，已跳过"
+
+    if not path.is_file():
+        return [], "CV附件：文件不存在，已跳过 ({})".format(path)
+
+    size = path.stat().st_size
+    if size > _CALENDAR_ATTACHMENT_LIMIT_BYTES:
+        return [], "CV附件：文件超过 20MB，已跳过 ({:.1f}MB)".format(size / 1024.0 / 1024.0)
+
+    try:
+        token = _upload_calendar_attachment(client, calendar_id, path)
+    except Exception as e:
+        return [], "CV附件：上传失败，已跳过 ({}: {})".format(type(e).__name__, str(e)[:160])
+
+    attachment = Attachment.builder() \
+        .file_token(token) \
+        .name(path.name) \
+        .file_size(str(size)) \
+        .build()
+    return [attachment], "CV附件：已上传并挂载 ({}, source={})".format(path.name, source)
+
+
 def delete_calendar_event_by_id(event_id):
     # type: (str) -> bool
     if side_effects_disabled():
@@ -201,8 +313,9 @@ def create_interview_event(
     old_event_id="",
     extra_attendee_open_ids=None,
     duration_minutes=None,
+    attach_cv=True,
 ):
-    # type: (str, str, int, str, str, str, Optional[list], Optional[int]) -> str
+    # type: (str, str, int, str, str, str, Optional[list], Optional[int], bool) -> str
     """
     创建面试日历事件。round_num=1 为一面，round_num=2 为二面。
     返回操作结果消息。若 old_event_id 非空则先删旧事件。
@@ -214,14 +327,22 @@ def create_interview_event(
         但不会让整个事件创建失败。
       duration_minutes: 事件时长（分钟）。None 表示走默认 60 分钟。
         §5.11 一面用 30 分钟。
+      attach_cv: 默认 True。创建面试日程时尽力把 talents.cv_path 指向的 CV
+        上传为日程附件；缺失 / 上传失败不阻断建日历，只在返回消息中提示。
     """
     if side_effects_disabled():
         extra_count = len(extra_attendee_open_ids or [])
-        return "测试模式：已跳过创建日历事件 talent_id={} round={} time={} extras={} duration={}".format(
-            talent_id, round_num, interview_time, extra_count, duration_minutes)
+        return "测试模式：已跳过创建日历事件 talent_id={} round={} time={} extras={} duration={} attach_cv={}".format(
+            talent_id, round_num, interview_time, extra_count, duration_minutes, bool(attach_cv))
 
     feishu = _cfg.get("feishu")
     boss_open_id = (feishu.get("boss_open_id", "") or "").strip()
+    # Polaris 是固定日程安排者 / 运营观察者，不等同于任一面试官角色。
+    polaris_open_id = (
+        feishu.get("polaris_open_id", "")
+        or feishu.get("scheduler_open_id", "")
+        or ""
+    ).strip()
     calendar_id = (feishu.get("calendar_id", "") or "").strip()
     client = _get_client()
     if not client:
@@ -246,24 +367,30 @@ def create_interview_event(
     if candidate_email:
         desc_parts.append("候选人邮箱: {}".format(candidate_email))
     if round_num == 2:
-        desc_parts.append("面试地点: 公司办公地址（按实际填写）")
+        desc_parts.append("面试地点: 上海市浦东新区杨高中路丁香国际商业中心西塔21楼致邃投资")
     desc_parts.append("\n由 OpenClaw 招聘助手自动创建")
+
+    cv_attachments, cv_status = _prepare_cv_calendar_attachment(
+        client, calendar_id, talent_id, enabled=attach_cv)
+
+    event_builder = CalendarEvent.builder() \
+        .summary(summary) \
+        .description("\n".join(desc_parts)) \
+        .start_time(TimeInfo.builder()
+            .timestamp(start_ts)
+            .timezone("Asia/Shanghai")
+            .build()) \
+        .end_time(TimeInfo.builder()
+            .timestamp(end_ts)
+            .timezone("Asia/Shanghai")
+            .build()) \
+        .need_notification(False)
+    if cv_attachments:
+        event_builder = event_builder.attachments(cv_attachments)
 
     create_req = CreateCalendarEventRequest.builder() \
         .calendar_id(calendar_id) \
-        .request_body(CalendarEvent.builder()
-            .summary(summary)
-            .description("\n".join(desc_parts))
-            .start_time(TimeInfo.builder()
-                .timestamp(start_ts)
-                .timezone("Asia/Shanghai")
-                .build())
-            .end_time(TimeInfo.builder()
-                .timestamp(end_ts)
-                .timezone("Asia/Shanghai")
-                .build())
-            .need_notification(False)
-            .build()) \
+        .request_body(event_builder.build()) \
         .build()
 
     create_resp = client.calendar.v4.calendar_event.create(create_req)
@@ -278,14 +405,22 @@ def create_interview_event(
         round_label, summary, interview_time, duration, event_id)
     if app_link:
         msg += "\n  - 直达链接: {}".format(app_link)
+    msg += "\n  - {}".format(cv_status)
 
-    # 收集所有 attendee：boss + extras，去重 + 跳占位符
+    # 收集所有 attendee：boss + Polaris（固定日程安排者）+ extras，去重 + 跳占位符。
+    # 一面 extras 应为路由出的真实面试官；二面通常不传 extras。
     attendee_open_ids = []
     seen = set()
     if boss_open_id and not boss_open_id.startswith(_PLACEHOLDER_PREFIX):
         attendee_open_ids.append(("boss", boss_open_id))
         seen.add(boss_open_id)
     skipped_placeholders = []
+    if polaris_open_id:
+        if polaris_open_id.startswith(_PLACEHOLDER_PREFIX):
+            skipped_placeholders.append(polaris_open_id)
+        elif polaris_open_id not in seen:
+            attendee_open_ids.append(("polaris", polaris_open_id))
+            seen.add(polaris_open_id)
     for oid in (extra_attendee_open_ids or []):
         oid = (oid or "").strip()
         if not oid or oid in seen:
@@ -318,7 +453,12 @@ def create_interview_event(
         if att_resp.success():
             tags = []
             for tag, _ in attendee_open_ids:
-                tags.append("老板" if tag == "boss" else "面试官")
+                if tag == "boss":
+                    tags.append("老板")
+                elif tag == "polaris":
+                    tags.append("Polaris（日程安排者）")
+                else:
+                    tags.append("面试官")
             msg += "\n  - 已成功邀请参与者：{}（共 {} 人）".format(
                 "、".join(tags), len(attendee_open_ids))
         else:
@@ -328,11 +468,27 @@ def create_interview_event(
         msg += "\n  - ⚠️ 跳过 {} 个占位符 open_id（未配置真实账号）".format(
             len(skipped_placeholders))
 
+    # v3.8.5：之前这里 except Exception: pass 把 "DB calendar_event_id 写不进去"
+    # 静默吞掉，后续 reschedule 找不到旧 event_id 就无法 delete + 重建。现在
+    # 改成"日历事件已建（不能撤）+ DB 写失败 → 立刻推飞书 critical 告警，让老板
+    # / 维护者手动跑 talent.cmd_update --round{N}-calendar-event-id 补救"。
+    # 不 raise 是为了让 caller 仍能拿到 msg 返回值（caller 需要展示日历已建）。
     try:
         from lib import talent_db as _tdb
         if _tdb._is_enabled():
             _tdb.update_calendar_event_id(talent_id, round_num, event_id)
-    except Exception:
-        pass
+    except Exception as e:
+        warn_line = (
+            "🔥 [feishu] 日历事件已建（event_id={ev}），但 DB calendar_event_id "
+            "写入失败：talent_id={tid} round={r} err={t}: {m}\n"
+            "→ 手动补救：talent.cmd_update --talent-id {tid} "
+            "--round{r}-calendar-event-id {ev}"
+        ).format(ev=event_id, tid=talent_id, r=round_num,
+                 t=type(e).__name__, m=str(e)[:200])
+        print(warn_line, file=sys.stderr)
+        try:
+            send_text(warn_line)
+        except Exception:
+            pass  # 二级补救告警失败只能 stderr 哀嚎，不嵌套异常
 
     return msg

@@ -2,19 +2,15 @@
 
 > **版本**：v3.5（2026-04-21）  
 > **运行环境**：Hermes Gateway · Python 3.10+ · PostgreSQL 状态真源 · 飞书 WebSocket  
-> **代码位置**：`<RECRUIT_WORKSPACE>/skills/recruit-ops/`
+> **代码位置**：`/home/admin/recruit-workspace/skills/recruit-ops/`
 
-> **【v3.5 重要架构变更】**：所有「业务剧本」类 wrapper（`round1/`、`round2/`、
-> `followup/` 三个目录整体下架；`interview/cmd_{confirm,defer,reschedule}`、
-> `common/cmd_{reschedule_request,finalize_interview_time,wait_return_resume}`、
-> `exam/{exam_prereview,exam_ai_reviewer,daily_exam_review,llm_analyzer}`、
-> `ops/cmd_push_alert` 全部下线）都已删除。判断与编排回到 **agent + atomic CLI**：
-> agent 读 [`docs/AGENT_RULES.md`](docs/AGENT_RULES.md) 决定下一步，调
-> `lib.run_chain` 串原子 CLI 完成动作。
+> **架构概念**：写操作只通过 **atomic CLI**（每个命令对应一个写动作 + 自验证 + 飞书告警）。
+> 多步流程（如"安排一面" = 发邮件 + 推 stage + 落字段）由 agent 读
+> [`docs/AGENT_RULES.md`](docs/AGENT_RULES.md) 决策，调 `lib.run_chain` 串原子 CLI 完成。
 
 > **补充文档**
-> - [`docs/AGENT_RULES.md`](docs/AGENT_RULES.md)：**v3.5 新增** Agent 决策规则手册（intent → chain 矩阵 + 典型 chain 范式 + 失败处理）
-> - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)：CLI 命令总参考（v3.5 已标 ⚠️ DELETED 的章节）
+> - [`docs/AGENT_RULES.md`](docs/AGENT_RULES.md)：Agent 决策规则手册（intent → chain 矩阵 + 典型 chain 范式 + 失败处理）
+> - [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)：CLI 命令总参考
 > - [`docs/COMPLEX_NEGOTIATION_REGRESSION.md`](docs/COMPLEX_NEGOTIATION_REGRESSION.md)：复杂协商真实回归清单
 
 ---
@@ -79,12 +75,16 @@ NEW → ROUND1_SCHEDULING → ROUND1_SCHEDULED → EXAM_SENT → EXAM_REVIEWED
 | `WAIT_RETURN` | 候选人暂时不在国内/上海，待回国后按记录轮次恢复排期 |
 | `ROUND2_SCHEDULING` | 二面邀请已发出，等候选人确认；老板日历尚未落盘 |
 | `ROUND2_SCHEDULED` | 二面时间已确认，等待面试 / 等老板出结果（无独立"待定"状态，老板可一直停在此态） |
-| `ROUND2_DONE_REJECT_KEEP` | 二面未通过，保留在人才库 |
+| `ROUND2_DONE_REJECT_KEEP` | 二面**面试**未通过，保留在人才库（v3.8.2 起严格只承载"我们 say no"语义） |
+| `OFFER_DECLINED_KEEP` | 候选人拿到 Offer 后**主动拒绝**，但保留在人才库（v3.8.2 拆出；语义上是"候选人 say no"，区别于 `ROUND2_DONE_REJECT_KEEP`） |
 | `POST_OFFER_FOLLOWUP` | 二面已通过，HR 已收到飞书通知准备发 Offer；老板/HR 与候选人通过邮件/Hermes 智能体沟通入职 |
+| `ONBOARDED` | 候选人已完成入职流程（叶子终态，v3.8 新增） |
 
 > **状态机收口历史**：
 > - **v3.3（4 月 22 日）**：删除 `ROUND1_DONE_PASS` / `ROUND2_DONE_PASS`（通过 = 直接进下一阶段，不需中间态），删除 `ROUND2_DONE_PENDING`（老板想拖延就停在 `ROUND2_SCHEDULED`），删除 `ROUND1_DONE_REJECT_KEEP`（一面未通过 = 直接物理删），笔试"未通过保留"独立成 `EXAM_REJECT_KEEP`。
 > - **v3.6（4 月 27/28 日）**：删除 `OFFER_HANDOFF`（瞬时态，合并入 `POST_OFFER_FOLLOWUP`），删除 `ROUND1_DONE_REJECT_DELETE` / `ROUND2_DONE_REJECT_DELETE`（`reject_delete` 直接物理删除，不经停 stage）。状态机从 14 个 stage 压到 11 个。
+> - **v3.8（5 月 10 日）**：新增 `ONBOARDED` 终态（招聘流程胜利收尾）。
+> - **v3.8.2（5 月 11 日）**：新增 `OFFER_DECLINED_KEEP`，从 `ROUND2_DONE_REJECT_KEEP` 拆出"拒 Offer 留池"独立终态（事故源 [docs/INCIDENT_RULES.md §14](docs/INCIDENT_RULES.md)）。状态机扩展到 13 个。
 
 ---
 
@@ -135,6 +135,9 @@ EXAM_SENT          发拒信 + 从DB彻底删除（物理删除，不经停 stag
   │           │             │
   ▼           ▼             ▼
 ROUND2_SCHEDULING  EXAM_REJECT_KEEP  发拒信 + 物理删除
+
+【旁路】候选人 ≥3 天未交答卷 → cron auto_reject.cmd_scan_exam_timeout 自动：
+  发 rejection_exam_no_reply 拒信 + talent.cmd_delete 物理删档（归档可恢复，v3.8.3）
 → 后台发送二面邀请邮件给候选人
 → 等候候选人确认
            ↓
@@ -156,15 +159,20 @@ ROUND2_SCHEDULED
 POST_OFFER_FOLLOWUP  ROUND2_DONE_REJECT_KEEP  发拒信 + 物理删除
 （v3.6：原 OFFER_HANDOFF 瞬时态已合并，此 stage 同时承担"等 HR 发 offer"和"沟通入职"两个语义；
  同步触发 HR Feishu 通知准备发 offer）
-→ 邮件由 inbox.cmd_scan + inbox.cmd_analyze 统一接管（v3.4 起；v3.5 把
-  exam.daily_exam_review 也并进 inbox.cmd_scan）。
+           ↓
+    候选人在 POST_OFFER_FOLLOWUP 期间也可能主动 decline（拿了 offer 又拒）：
+       拒绝（保留）           拒绝（删除）
+       │                       │
+       ▼                       ▼
+   OFFER_DECLINED_KEEP    发拒信 + 物理删除
+   （v3.8.2 拆出，语义                      
+    区别于 ROUND2_DONE_REJECT_KEEP）
+→ 邮件由 inbox.cmd_scan + inbox.cmd_analyze 统一接管。
   老板通过飞书卡片或 Hermes 智能体回信，agent 直接调原子 CLI：
     outbound.cmd_send --use-cached-draft EMAIL_ID
     （或 --subject + --body-file + --in-reply-to 自由文本）
     + talent_db.mark_email_status(EMAIL_ID, 'snoozed'|'dismissed')
-  （v3.5 起 followup/ 目录已下架；v3.5.2 起 talents.followup_status /
-   followup_entered_at 等字段也 DROP，结案/snooze 语义只在
-   talent_emails.status 层面保留。详见 docs/AGENT_RULES.md §3、§5）
+  （结案/snooze 语义在 talent_emails.status 层面维护。详见 docs/AGENT_RULES.md §3、§5）
 ```
 
 ---
@@ -286,10 +294,10 @@ OC 自动发送邀请邮件给候选人，等待候选人回复。
 | cron 任务 | 频率（推荐） | 说明 |
 |---------|------|------|
 | `cron.cron_runner` | 每 10–30 分钟 | 串行触发下列子任务，对失败 / 心跳缺失推送飞书告警 |
-| · `inbox.cmd_scan` | （由 runner 触发） | IMAP → `talent_emails`（v3.3 新增；v3.4 起接管 followup；v3.5 也接管原 `daily_exam_review` 的扫描职责） |
-| · `inbox.cmd_analyze` | （由 runner 触发） | LLM **stage-aware** 分类（POST_OFFER_FOLLOWUP 走 `prompts/post_offer_followup.json` 含草稿生成；其他阶段走 `prompts/inbox_general.json`，v3.5 把改期 / 暂缓 / 线上请求 / 笔试提交等 intent 也并入此 prompt）+ 推飞书 |
+| · `inbox.cmd_scan` | （由 runner 触发） | IMAP → `talent_emails`，**v3.8.4 起**跳过两个终态 `ONBOARDED` + `OFFER_DECLINED_KEEP`（终态分权,详见 [docs/INCIDENT_RULES.md §16](docs/INCIDENT_RULES.md)）；其他 stage 候选人邮件统一入口 |
+| · `inbox.cmd_analyze` | （由 runner 触发） | LLM **stage 感知**分类（POST_OFFER_FOLLOWUP 走 `prompts/post_offer_followup.json` 含草稿生成；其他阶段走 `prompts/inbox_general.json`，覆盖确认 / 改期 / 暂缓 / 线上请求 / 笔试提交等 intent）+ 推飞书。**v3.8.4 stage-aware override**：`ROUND{N}_SCHEDULING` 阶段的 `confirm_interview` 强制 `need_boss_action=true` → 推 warn 卡等老板拍板建日历（场景 8 分权） |
 | · `common.cmd_interview_reminder` | （由 runner 触发） | 面试结束后未出结果催问 |
-| · `auto_reject.cmd_scan_exam_timeout --auto` | （由 runner 触发） | 笔试 ≥3 天未交 → 即触发拒信 + 推 stage `EXAM_REJECT_KEEP` 留池 + 飞书事后通知（v3.5.11 起；之前是物理删档） |
+| · `auto_reject.cmd_scan_exam_timeout --auto` | （由 runner 触发） | 笔试 ≥3 天未交 → 即触发拒信 + `talent.cmd_delete` 物理删档（自动归档到 `data/deleted_archive/`）+ 飞书事后通知含 archive 路径（**v3.8.3** 回退到 v3.5 之前的删档行为；v3.5.11~v3.8.2 期间是"拒+留池 `EXAM_REJECT_KEEP`"，事故应激修复，详见 [docs/INCIDENT_RULES.md §15](docs/INCIDENT_RULES.md)） |
 | · `ops.cmd_health_check` | 每天 09 点 | DB / IMAP / SMTP / DashScope / Feishu 体检 |
 | `cron_health.py --alert` | 每 1 小时（独立 cron） | 心跳超过 26h 未更新时告警，作为 cron_runner 自身死掉的兜底 |
 
@@ -315,7 +323,7 @@ OC 自动发送邀请邮件给候选人，等待候选人回复。
 
 ### 可观测性
 
-- **心跳**：`<RECRUIT_WORKSPACE>/data/.cron_heartbeat` 由 `cron.cron_runner` 每次成功跑完后更新
+- **心跳**：`/home/admin/recruit-workspace/data/.cron_heartbeat` 由 `cron.cron_runner` 每次成功跑完后更新
 - **告警**：任一子任务非零退出 / 超时 / Feishu 投递失败 → 推 `[CRON FAIL] ...` 给老板
 - **重入保护**：`flock /tmp/recruit-cron-runner.lock`，已有实例运行时本次跳过
 - **手动健康检查**：`python3 scripts/cron_health.py --alert`（可独立部署到 cron）
@@ -334,17 +342,18 @@ Hermes Gateway（:17166）
 LLM Agent（qwen3-max，阿里云 DashScope）
       │  exec tool 调用 Python 脚本
       ▼
-scripts/                                # v3.5：所有"业务剧本"wrapper 已下线
+scripts/                                # 全部为 atomic CLI（agent 用 lib.run_chain 编排）
   ├── tests/
-  │   ├── run_all.py                   # 测试聚合入口
-  │   └── test_*.py
+  │   ├── conftest.py                  # pytest 基建：env 兜底 + fixture (mem_tdb / tmp_data_root) (v3.8.7 C3)
+  │   ├── helpers.py                   # 内存 DB / call_main / wipe_state（unittest 风格测试用）
+  │   └── test_*.py                    # 跑测试: 仓库根 `uv run pytest` 或 `.venv/bin/python -m pytest`
   ├── lib/                             # 公共模块（agent / atomic CLI 共享）
   │   ├── config.py                    # 统一配置加载（DB/飞书/邮件/DashScope）
   │   ├── core_state.py                # 状态机、阶段定义、审计
   │   ├── talent_db.py                 # PostgreSQL 读写（RealDictCursor、参数化 round）
-  │   ├── exam_grader.py               # 【v3.5 新】LLM 笔试评分（前身 exam_ai_reviewer）
-  │   ├── exam_imap.py                 # 【v3.5 新】IMAP / MIME 工具（前身 daily_exam_review 内）
-  │   ├── run_chain.py                 # 【v3.4 新】lib.run_chain：进程内串原子 CLI
+  │   ├── exam_grader.py               # LLM 笔试评分
+  │   ├── exam_imap.py                 # IMAP / MIME 工具
+  │   ├── run_chain.py                 # lib.run_chain：进程内串原子 CLI
   │   ├── feishu/                      # 飞书 SDK 封装（IM + 日历）
   │   ├── bg_helpers.py                # 后台邮件 / 日历子进程封装
   │   ├── migrations/
@@ -357,10 +366,10 @@ scripts/                                # v3.5：所有"业务剧本"wrapper 已
   ├── outbound/                        # 出站邮件唯一入口
   │   └── cmd_send.py                  # 模板 / 自由文本 / --use-cached-draft（atomic）
   ├── inbox/                           # 入站三件套（atomic）
-  │   ├── cmd_scan.py                  # IMAP → talent_emails（v3.5 接管全部 stage 扫描）
-  │   ├── cmd_analyze.py               # stage-aware LLM 分类 + 推飞书
-  │   └── cmd_review.py                # 候选人邮件 timeline（只读）
-  ├── interview/                       # 【v3.5 仅剩 cmd_result】
+  │   ├── cmd_scan.py                  # IMAP → talent_emails（所有 stage 统一入口）
+  │   ├── cmd_analyze.py               # stage 感知 LLM 分类 + 推飞书
+  │   └── cmd_review.py                # 候选人邮件时间线（只读）
+  ├── interview/
   │   └── cmd_result.py                # 面试结果（--round 1|2，atomic）
   ├── exam/                            # 笔试（atomic）
   │   ├── cmd_exam_result.py           # 笔试结果 → 推 stage（atomic）
@@ -369,32 +378,26 @@ scripts/                                # v3.5：所有"业务剧本"wrapper 已
   ├── feishu/                          # 飞书 sink atomic CLIs
   │   ├── cmd_calendar_create.py       # 创建日历事件
   │   ├── cmd_calendar_delete.py       # 删除日历事件
-  │   └── cmd_notify.py                # 【v3.5 新】统一飞书消息推送（前身 ops/cmd_push_alert）
+  │   └── cmd_notify.py                # 统一飞书消息推送
   ├── auto_reject/
-  │   └── cmd_scan_exam_timeout.py     # 笔试 ≥3 天未交 → 拒信 + 推 EXAM_REJECT_KEEP 留池
+  │   └── cmd_scan_exam_timeout.py     # 笔试 ≥3 天未交 → 拒信 + 物理删档（v3.8.3）
   ├── common/                          # 查询、删除、催问等横切命令
   ├── ops/                             # 跨 sink 运维（cmd_db_migrate / cmd_health_check / cmd_replay_notifications）
   ├── cron/                            # v3.3 cron 编排器（cron_runner.py）
-  ├── prompts/                         # 【v3.4 新】所有 LLM prompt 配置 JSON
+  ├── prompts/                         # 所有 LLM prompt 配置 JSON
   └── trigger_cron_now.py              # 手动提前触发 cron
 
-# v3.5 已删除目录：scripts/round1/ · scripts/round2/ · scripts/followup/
-# v3.5 已删除文件（节选）：interview/cmd_{confirm,defer,reschedule}.py、
-#   common/cmd_{reschedule_request,finalize_interview_time,wait_return_resume}.py、
-#   exam/{exam_prereview,exam_ai_reviewer,daily_exam_review,llm_analyzer}.py、
-#   ops/cmd_push_alert.py
-
 docs/
-  ├── AGENT_RULES.md                   # 【v3.5 新】Agent 决策矩阵 + 典型 chain
+  ├── AGENT_RULES.md                   # Agent 决策矩阵 + 典型 chain
   ├── CLI_REFERENCE.md
   └── COMPLEX_NEGOTIATION_REGRESSION.md
 
 外部依赖：
-  <RECRUIT_WORKSPACE>/config/recruit-email-config.json   # IMAP/SMTP 邮箱配置
-  <RECRUIT_WORKSPACE>/config/email-send-config.json      # SMTP 发信配置
-  <RECRUIT_WORKSPACE>/config/talent-db-config.json       # PostgreSQL 连接配置（可选）
-  <RECRUIT_WORKSPACE>/config/dashscope-config.json       # DashScope API Key
-  <RECRUIT_WORKSPACE>/config/openclaw.json               # 飞书 App 配置（app_id / app_secret）
+  /home/admin/recruit-workspace/config/recruit-email-config.json   # IMAP/SMTP 邮箱配置
+  /home/admin/recruit-workspace/config/email-send-config.json      # SMTP 发信配置
+  /home/admin/recruit-workspace/config/talent-db-config.json       # PostgreSQL 连接配置（可选）
+  /home/admin/recruit-workspace/config/dashscope-config.json       # DashScope API Key
+  /home/admin/recruit-workspace/config/openclaw.json               # 飞书 App 配置（app_id / app_secret）
 ```
 
 ### 关键技术决策
@@ -404,29 +407,29 @@ docs/
 | exec 工具 ~3 秒超时 | 邮件/日历全部用 `subprocess.Popen(start_new_session=True)` 后台进程执行 |
 | LLM 调用稳定性 | 直接调用 DashScope API，绕过 Gateway，避免 OOM 影响 |
 | Python 3.10+ | 代码与测试已使用现代 typing/路径注解语法；时间解析仍统一走 `python-dateutil` |
-| 邮件去重 | `talent_emails` 表 `(talent_id, message_id) UNIQUE` 物理去重；`talents.*_last_email_id` 双写兼容旧代码（标记 `[DEPRECATED 2026-04-20]`，下个 release 移除）；`talent_events.event_id` 保证事件幂等 |
+| 邮件去重 | `talent_emails` 表 `(talent_id, message_id) UNIQUE` 物理去重；`talent_events.event_id` 保证事件幂等（原 `talents.*_last_email_id` 单游标 v3.5.2 已 DROP, migration `20260421_v35_drop_dead_columns.sql` v3.8.7 已删档） |
 | 时区处理 | 所有时间戳统一以本地 CST（UTC+8）存储和显示 |
 | 状态持久化 | PostgreSQL 为唯一数据源；配置统一由 `lib/config.py` 管理 |
 | 配置管理 | `lib/config.py` 统一加载 JSON 配置文件 + 环境变量，替代分散的配置逻辑 |
 | DB 模式 | `RealDictCursor` 消除 `row[N]` 硬编码；数据库结构由 `lib/migrations/schema.sql` 维护 |
-| 脚本合并 | round1/round2 同类脚本合并到 `interview/`，接受 `--round 1\|2` 参数；旧路径通过 wrapper 保持兼容 |
+| 脚本合并 | round1/round2 同类脚本合并到 `interview/`，接受 `--round 1\|2` 参数；旧路径通过包装脚本保持兼容 |
 | 模块间通信 | 关键路径由 `subprocess` 调用改为直接函数调用，减少 fork 开销和进程隔离问题 |
 
 ---
 
 ## 七、脚本速查
 
-### 候选人管理（v3.5：全部走 atomic CLI；编排见 docs/AGENT_RULES.md）
+### 候选人管理（全部走 atomic CLI；多步编排见 docs/AGENT_RULES.md）
 
 ```bash
-cd <RECRUIT_WORKSPACE>/skills/recruit-ops
+cd /home/admin/recruit-workspace/skills/recruit-ops
 
 # 推荐统一前缀：`uv run python3 -m <module>` （避免子模块 import 路径问题）
 
 # 录入新候选人
 uv run python3 -m intake.cmd_new_candidate --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
 
-# 安排一面（v3.5：agent 调 lib.run_chain 串以下两步，不再有 cmd_round1_schedule wrapper）
+# 安排一面（agent 用 lib.run_chain 串以下两步原子 CLI）
 uv run python3 -m outbound.cmd_send --talent-id t_xxxxx --template round1_invite \
   --vars '{"round1_time":"2026-03-25 14:00","interviewer":"老板"}'
 uv run python3 -m talent.cmd_update --talent-id t_xxxxx --stage ROUND1_SCHEDULING \
@@ -447,23 +450,23 @@ uv run python3 -m common.cmd_status                      # 列出所有候选人
 uv run python3 -m common.cmd_status --talent-id t_xxxxx  # 查单人
 ```
 
-### 邮件扫描 / 分析（v3.5：统一 inbox/，daily_exam_review 已下线）
+### 邮件扫描 / 分析（统一走 inbox/）
 
 ```bash
 # 扫所有候选人邮件（写 talent_emails；不调 LLM）
 uv run python3 -m inbox.cmd_scan
 
-# 对未分析邮件做 stage-aware LLM 分类，并按规则推飞书
+# 对未分析邮件做 stage 感知 LLM 分类，并按规则推飞书
 uv run python3 -m inbox.cmd_analyze
 
-# 看某候选人邮件 timeline
+# 看某候选人邮件时间线
 uv run python3 -m inbox.cmd_review --talent-id t_xxxxx
 ```
 
-### 飞书通知（v3.5：统一 atomic CLI）
+### 飞书通知
 
 ```bash
-# 推送一条消息给老板（替代旧 ops/cmd_push_alert）
+# 推送一条消息给老板
 uv run python3 -m feishu.cmd_notify --to boss --text "需要确认 张三 一面改期"
 
 # Python 内嵌测试
@@ -487,9 +490,9 @@ uv run python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 
 ### 8.2 配置文件
 
-所有配置文件统一放在 `<RECRUIT_WORKSPACE>/config/`，**不提交到 Git**。参考 example 文件创建：
+所有配置文件统一放在 `/home/admin/recruit-workspace/config/`，**不提交到 Git**。参考 example 文件创建：
 
-**`<RECRUIT_WORKSPACE>/config/recruit-email-config.json`**（复制自 `config/recruit-email-config.example.json`）：
+**`/home/admin/recruit-workspace/config/recruit-email-config.json`**（复制自 `config/recruit-email-config.example.json`）：
 ```json
 {
   "RECRUIT_EXAM_IMAP_HOST": "imap.example.com",
@@ -499,7 +502,7 @@ uv run python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 }
 ```
 
-**`<RECRUIT_WORKSPACE>/config/talent-db-config.json`**（复制自 `config/talent-db-config.example.json`；仅在启用 PostgreSQL 时需要）：
+**`/home/admin/recruit-workspace/config/talent-db-config.json`**（复制自 `config/talent-db-config.example.json`；仅在启用 PostgreSQL 时需要）：
 ```json
 {
   "TALENT_DB_HOST": "localhost",
@@ -510,7 +513,7 @@ uv run python3 -c "import feishu as fc; fc.send_text_to_hr('发给HR的消息')"
 }
 ```
 
-**`<RECRUIT_WORKSPACE>/config/dashscope-config.json`**（新建，不在 Git 中）：
+**`/home/admin/recruit-workspace/config/dashscope-config.json`**（新建，不在 Git 中）：
 ```json
 {
   "DASHSCOPE_API_KEY": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -531,25 +534,28 @@ export INTERVIEW_CONFIRM_TIMEOUT_MINUTES=2880  # 超时确认阈值（默认 48h
 **如何获取飞书 open_id：**
 让对方在飞书向机器人发送任意消息，查看 Gateway 日志中的 `received message from <open_id>`。
 
-### 8.3.1 Skill 文件链接方式
+### 8.3.1 Skill 文件链接方式（v3.6 起：目录级软链）
 
-当前本地部署采用**单一源文件 + Hermes 软链接**的方式：
+当前本地部署采用**目录级软链接**：整个 `recruit-ops` skill 目录被软链到 Hermes 加载路径。
 
-- 源文件：`<RECRUIT_WORKSPACE>/docs/recruit-ops-SKILL.md`
-- Hermes 运行时入口：`~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md`
-
-其中 Hermes 路径下的 `SKILL.md` 是一个**软链接**，指向 workspace 中的源文件。
+- 源目录：`/home/admin/recruit-workspace/skills/recruit-ops/`
+- Hermes 运行时入口：`~/.hermes/skills/openclaw-imports/recruit-ops/`（指向上面的源目录）
 
 规则：
 
-- 日常只编辑 `recruit-workspace/docs/recruit-ops-SKILL.md`
-- 不要直接覆盖 `~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md`
-- 如需重建链接，可执行：
+- 日常只编辑 `skills/recruit-ops/SKILL.md` 和 `skills/recruit-ops/docs/*.md`
+- **不要**直接覆盖 Hermes 那端的任何文件
+- 改完任何 doc **不需要 `cp`**——Hermes 重启后直接读到新内容
+
+如需重建链接：
 
 ```bash
-rm ~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md
-ln -s <RECRUIT_WORKSPACE>/docs/recruit-ops-SKILL.md ~/.hermes/skills/openclaw-imports/recruit-ops/SKILL.md
+rm -rf ~/.hermes/skills/openclaw-imports/recruit-ops
+ln -sfn /home/admin/recruit-workspace/skills/recruit-ops \
+        ~/.hermes/skills/openclaw-imports/recruit-ops
 ```
+
+详细见 [docs/OPERATIONS.md §3](docs/OPERATIONS.md#3-hermes-加载与-skillmd-同步目录级软链)。
 
 ### 8.4 数据库初始化
 
@@ -564,7 +570,7 @@ GRANT ALL PRIVILEGES ON DATABASE recruit TO recruit_app;
 
 ```bash
 # 手动初始化 schema
-psql "$DATABASE_URL" -f <RECRUIT_WORKSPACE>/skills/recruit-ops/scripts/lib/migrations/schema.sql
+psql "$DATABASE_URL" -f /home/admin/recruit-workspace/skills/recruit-ops/scripts/lib/migrations/schema.sql
 ```
 
 已有数据库在 schema 变更后也应重复执行同一份 `schema.sql`。例如本轮 `talent_events.event_id` 的补列、回填和 `UNIQUE(event_id)` 切换，就是通过重复执行终态 schema 完成迁移。
@@ -584,14 +590,26 @@ crontab -e
 
 ### 8.6 笔试附件
 
-将笔试题目和数据文件放入 `exam_files/` 目录（此目录不提交到 Git）：
+笔试邀请邮件的题包附件由 `email_templates.auto_attachments` 的 `exam_invite` resolver 自动注入（v3.8.4 起；之前在 `interview/cmd_result.py::_get_exam_attachments` 里硬编码，已下线）。
+
+resolver 按以下优先级找题包，命中第一个非空文件即用，全部缺失会 **fail-fast 拒发邀请**（保证不会裸发"题目已作为附件"但漏附件）：
+
+| 优先级 | 路径 | 用途 |
+|---|---|---|
+| 1 | `data/exam_txt/笔试题.tar.gz` | 推荐位置（受 `RECRUIT_EXAM_ARCHIVE_DIR` 控制，可被 env 重定向） |
+| 2 | `data/exam_txt/笔试题.zip` | 同上目录的 zip 备选 |
+| 3 | `skills/recruit-ops/exam_files/exam_package.zip` | 老路径（git-untracked），仅作向后兼容 |
+| 4 | `data/exam_txt/笔试题.tar` | 兜底 |
+
+> HR 想换题：直接用同名文件覆盖 `data/exam_txt/笔试题.tar.gz` 即可，无需改代码；想加额外候选格式去改 `email_templates/auto_attachments.py::_resolve_exam_invite_attachments`。
+
+`skills/recruit-ops/exam_files/` 目录仍保留 git-tracked 的评分配置：
 
 ```
 exam_files/
-├── 实习生笔试题目.txt      # 笔试题目说明
-├── STOCK_CODE.order.csv    # 示例数据文件
-├── STOCK_CODE.transaction.csv
-└── exam_package.zip        # 打包发给候选人的压缩包
+├── rubric.json             # 笔试评分细则（AI 预审用）
+├── followup_prompt.json    # followup LLM prompt
+└── exam_package.zip        # 兼容老路径的题包占位（可空，仅用于优先级 3）
 ```
 
 ---
@@ -614,12 +632,12 @@ tail -f /tmp/email_bg.log
 tail -f /tmp/feishu_calendar_bg.log
 ```
 
-### 手动触发扫描（v3.5：daily_exam_review 已下线，统一走 inbox/）
+### 手动触发扫描
 
 ```bash
-cd <RECRUIT_WORKSPACE>/skills/recruit-ops
+cd /home/admin/recruit-workspace/skills/recruit-ops
 
-# 手动扫所有候选人邮件（替代旧 daily_exam_review）
+# 手动扫所有候选人邮件
 uv run python3 -m inbox.cmd_scan
 uv run python3 -m inbox.cmd_analyze
 
@@ -630,7 +648,7 @@ uv run python3 -m cron.cron_runner
 ### 查看当前候选人
 
 ```bash
-cd <RECRUIT_WORKSPACE>/skills/recruit-ops
+cd /home/admin/recruit-workspace/skills/recruit-ops
 uv run python3 -m common.cmd_status
 ```
 
@@ -650,8 +668,7 @@ PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
 > 下一轮 cron 跑到时即会重新识别为新邮件并走完整流程。
 
 ```bash
-# 查看候选人最近的邮件流水（v3.5.2：原 *_last_email_id 字段已 DROP，
-# 邮件去重 source-of-truth 完全在 talent_emails 表）
+# 查看候选人最近的邮件流水（邮件去重唯一真源在 talent_emails 表）
 PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
   -c "SELECT email_id, direction, context, status, ai_intent, sent_at, subject \
       FROM talent_emails WHERE talent_id='t_xxxxx' \
@@ -674,6 +691,6 @@ PGPASSWORD=your_password psql -h localhost -U recruit_app -d recruit \
 | OC 收到 HR 消息但未录入候选人 | 检查模板格式（必须以 `【新候选人】` 或 `【导入候选人】` 开头） |
 | 候选人没有收到邀请邮件 | 检查 `/tmp/email_bg.log` 和 SMTP 配置 |
 | 飞书日历未创建 | 检查 `/tmp/feishu_calendar_bg.log`，确认 `FEISHU_BOSS_OPEN_ID` 已配置 |
-| LLM 分析报 "未配置" | 检查 `<RECRUIT_WORKSPACE>/config/dashscope-config.json` 中的 API Key |
+| LLM 分析报 "未配置" | 检查 `/home/admin/recruit-workspace/config/dashscope-config.json` 中的 API Key |
 | cron 扫描无输出 | 正常现象（`--auto` 模式下无新邮件时静默），查看日志确认 cron 有执行 |
 | 超时通知未发送 | 检查 `auto_reject/cmd_scan_exam_timeout.py`（笔试超时）与 `common/cmd_interview_reminder.py`（面试无结果催问）的 `TIMEOUT_MINUTES` 值和时区解析 |

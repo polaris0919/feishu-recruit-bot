@@ -12,7 +12,7 @@
     [--wechat zhangwei_wx] \
     [--position 后端工程师] \
     [--education 本科] \
-    [--school 示例大学] \
+    [--school 清华大学] \
     [--work-years 4] \
     [--experience "前美团，做过订单系统"] \
     [--source Boss直聘] \
@@ -131,11 +131,11 @@ def main(argv=None):
     p.add_argument("--experience",    default="",  help="工作经历简述")
     p.add_argument("--resume-summary", default="", help="简历摘要（HR 填写）")
     p.add_argument("--source",        default="",  help="简历来源（Boss直聘/猎头/内推/官网）")
-    p.add_argument("--cv-path",       default="",  help="简历 PDF 本地路径（由 cmd_parse_cv.py 自动传入）")
+    p.add_argument("--cv-path",       default="",  help="简历 PDF 本地路径（由 cmd_ingest_cv.py 自动传入）")
     # v3.5.7：是否会 C++（用于 §5.11 一面派单 cpp_first 优先级）
-    # 三态：true/false/null（默认 null=未判断）。由 cmd_parse_cv 自动传入。
+    # 三态：true/false/null（默认 null=未判断）。由 cmd_ingest_cv → lib.cv_parser 自动传入。
     p.add_argument("--has-cpp",       default="", choices=["", "true", "false", "null"],
-                   help="是否会 C++ (true/false/null)，由 cmd_parse_cv 解析 CV 后传入")
+                   help="是否会 C++ (true/false/null)，由 lib.cv_parser 解析 CV 后传入")
     p.add_argument("--feishu-notify", action="store_true", help="录入成功后飞书通知老板")
     args = p.parse_args(argv or sys.argv[1:])
 
@@ -203,6 +203,20 @@ def main(argv=None):
         has_cpp = False
     # "" 或 "null" 都视为未判断，落 NULL
 
+    # CV 来源可能是 Hermes cache。cache 会被清理，所以新候选人入库时
+    # 先把文件归档到 data/candidates/<tid>/cv/，再写入 talents.cv_path。
+    final_cv_path = args.cv_path.strip() or None
+    cv_import_warning = None
+    if final_cv_path:
+        try:
+            from lib import candidate_storage as _cs
+            mode = (os.environ.get("RECRUIT_CV_IMPORT_MODE") or "move").strip().lower()
+            if mode not in ("move", "copy"):
+                mode = "move"
+            final_cv_path = str(_cs.import_cv(talent_id, final_cv_path, mode=mode))
+        except Exception as e:
+            cv_import_warning = "{}: {}".format(type(e).__name__, e)
+
     cand = {
         "talent_id":       talent_id,
         "stage":           "NEW",
@@ -217,7 +231,7 @@ def main(argv=None):
         "work_years":      args.work_years,
         "experience":      (args.resume_summary or args.experience).strip() or None,
         "source":          args.source.strip() or None,
-        "cv_path":         args.cv_path.strip() or None,
+        "cv_path":         final_cv_path,
         "has_cpp":         has_cpp,
     }
 
@@ -279,23 +293,51 @@ def main(argv=None):
         lines.append("- 来源     : {}".format(args.source))
     if args.experience:
         lines.append("- 简历摘要 : {}".format(args.experience[:80]))
+    if final_cv_path:
+        lines.append("- 简历文件 : {}".format(final_cv_path))
+    if cv_import_warning:
+        lines.append("- 简历归档 : ⚠️ 失败，{}".format(cv_import_warning))
     lines.append("- 当前阶段 : NEW（等待老板安排一面时间）")
     lines.append("")
-    lines.append("老板可通过以下命令安排一面（v3.5：agent 调 lib.run_chain 串原子 CLI）：")
+    lines.append("安排一面请走 §4.1 轻量确认门（先确认时间，再发邮件/建日历）：")
     lines.append(
-        "  uv run python3 -m outbound.cmd_send --talent-id {} --template round1_invite \\".format(talent_id)
+        "  1) uv run python3 -m talent.cmd_update --talent-id {} \\".format(talent_id)
     )
     lines.append(
-        "      --vars round1_time=\"YYYY-MM-DD HH:MM\" --json"
+        "       --set round1_proposed_time=\"YYYY-MM-DD HH:MM\""
     )
     lines.append(
-        "  uv run python3 -m talent.cmd_update --talent-id {} --stage ROUND1_SCHEDULING \\".format(talent_id)
+        "  2) 用飞书问 HR/老板确认：确认安排 {} YYYY-MM-DD HH:MM".format(args.name.strip())
     )
     lines.append(
-        "      --set round1_time=\"YYYY-MM-DD HH:MM\" --set round1_invite_sent_at=__NOW__ \\"
+        "  3) 确认后：uv run python3 -m intake.cmd_route_interviewer --talent-id {} --json".format(talent_id)
     )
     lines.append(
-        "      --set round1_confirm_status=PENDING"
+        "  4) uv run python3 -m outbound.cmd_send --talent-id {} --template round1_invite \\".format(talent_id)
+    )
+    lines.append(
+        "       --vars round1_time=\"YYYY-MM-DD HH:MM\" --json"
+    )
+    lines.append(
+        "  5) uv run python3 -m feishu.cmd_calendar_create --talent-id {} \\".format(talent_id)
+    )
+    lines.append(
+        "       --time \"YYYY-MM-DD HH:MM\" --round 1 --duration-minutes 30 --json"
+    )
+    lines.append(
+        "  6) uv run python3 -m talent.cmd_update --talent-id {} --stage ROUND1_SCHEDULED \\".format(talent_id)
+    )
+    lines.append(
+        "       --set round1_time=\"YYYY-MM-DD HH:MM\" --set round1_proposed_time=__NULL__ \\"
+    )
+    lines.append(
+        "       --set round1_invite_sent_at=<send.sent_at> --set round1_confirm_status=CONFIRMED \\"
+    )
+    lines.append(
+        "       --set round1_calendar_event_id=<cal.event_id>"
+    )
+    lines.append(
+        "  注意：未收到明确确认前，不发邮件、不建日历、不写 ROUND1_SCHEDULED。"
     )
 
     output = "\n".join(lines)

@@ -11,11 +11,11 @@
 
 【目录约定】
   data/candidates/                            ← 真目录（talent_id key）
-    t_demo02/cv/...
-    t_demo02/exam_answer/em_xxx/...
+    t_pf9ku0/cv/...
+    t_pf9ku0/exam_answer/em_xxx/...
     by_name/                                  ← 全自动维护，HR 不要手编
-      候选人H__t_demo02  →  symlink ../t_demo02
-      候选人H__t_xxx     →  symlink ../t_xxx       （重名时用 tid 区分）
+      张子鸣__t_pf9ku0  →  symlink ../t_pf9ku0
+      张子鸣__t_xxx     →  symlink ../t_xxx       （重名时用 tid 区分）
       未命名__t_yyy     →  symlink ../t_yyy       （DB 里没姓名时的 placeholder）
 
 【纯函数 + 一组写入入口】

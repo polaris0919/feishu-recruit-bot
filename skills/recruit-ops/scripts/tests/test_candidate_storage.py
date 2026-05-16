@@ -7,7 +7,7 @@
   3. ensure_candidate_dirs：幂等 / 失败兜成 error 字段（不抛）/ dry-run 不动盘
   4. import_cv：move / copy / 重名加 (2) / 已在目标目录 no-op / 幂等同文件
   5. _validate_talent_id：拒空 / 路径分隔符 / .开头
-  6. RECRUIT_DATA_ROOT env 隔离：测试不污染 <RECRUIT_WORKSPACE>/data
+  6. RECRUIT_DATA_ROOT env 隔离：测试不污染 /home/admin/recruit-workspace/data
 """
 from __future__ import annotations
 
@@ -249,11 +249,11 @@ class TestImportCv(unittest.TestCase):
     def test_feishu_doc_prefix_is_stripped_on_import(self):
         """飞书 Gateway 的 doc_<hex>_ 前缀在落盘时应被剥掉（v3.5.10）。"""
         # 模拟飞书拖进来的源文件
-        src = self.src_dir / "doc_0123456789ab_候选人BCV.pdf"
+        src = self.src_dir / "doc_bfcbf2a1a335_车光明CV.pdf"
         src.write_bytes(b"%PDF-1.4 feishu attachment")
         new_path = cs.import_cv(self.tid, str(src), mode="move")
         # 目标文件名应不带 doc_ 前缀
-        self.assertEqual(new_path.name, "候选人BCV.pdf")
+        self.assertEqual(new_path.name, "车光明CV.pdf")
         self.assertTrue(new_path.is_file())
         self.assertFalse(src.exists())
 
@@ -289,7 +289,7 @@ class TestStripFeishuPrefix(unittest.TestCase):
 
     def test_strips_standard_12hex_prefix(self):
         self.assertEqual(
-            cs.strip_feishu_prefix("doc_0123456789ab_张三.pdf"),
+            cs.strip_feishu_prefix("doc_bfcbf2a1a335_张三.pdf"),
             "张三.pdf")
 
     def test_strips_8_to_32_hex(self):

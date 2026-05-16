@@ -75,9 +75,25 @@ _JUNK_KEYWORDS = (
     "auto-reply", "out of office", "自动回复",
 )
 
-# 仅做记录，不做"终态过滤" —— 即使 candidate 已被拒，只要未删就继续收邮件
-# （老板有时候拒后还要扯几封，保留证据）
-_SKIP_STAGES = frozenset()  # 留空 = 全量
+# v3.8.4 场景 12 分权修订：ONBOARDED + OFFER_DECLINED_KEEP 两个 stage 不再扫邮件。
+#
+#   - ONBOARDED：候选人已入职、流程胜利收尾,后续邮件应走 HR / 直接同事沟通通道,
+#                不再由 agent 介入分析或推飞书打扰老板。
+#   - OFFER_DECLINED_KEEP：候选人已明确拒了 offer,留池只是"将来万一回心转意可被
+#                          force-jump 反向激活",在那之前 agent 不再扫他的邮件。
+#
+# 其他三类留池/终态仍然继续扫:
+#   - EXAM_REJECT_KEEP：候选人**没拒过我们**(只是笔试没过),将来可能主动回头追问
+#                      笔试结果 / 重新投递,这种邮件仍要让 agent 推飞书让老板看到。
+#   - ROUND2_DONE_REJECT_KEEP：同上,候选人没拒我们(是我们 say no),仍可能来追问。
+#   - WAIT_RETURN：等候选人回国信号,**必须**扫邮件才能收到 §4.7 的回归信号。
+#
+# 设计取舍：跳过 ONBOARDED / OFFER_DECLINED_KEEP 后,这两个 stage 期间的候选人邮件
+# 会停留在 IMAP 里**永不入库**——这是有意为之(免污染 talent_emails)。如果将来这俩
+# 候选人被 §4.9 force-jump 重新激活,本扫描的 IMAP SINCE 窗口默认只回拉最近 max_fetch
+# 封,届时旧邮件可能漏掉——这是可以接受的代价(此类回头场景极少,需要时 HR 手动转发
+# 邮件给 boss 即可)。
+_SKIP_STAGES = frozenset({"ONBOARDED", "OFFER_DECLINED_KEEP"})
 
 
 def _strip_quoted_reply(text):
@@ -216,6 +232,13 @@ def _process_candidate(imap, candidate, since_dt, dry_run=False):
                 "skipped_junk": 0, "errors": 1,
                 "attachments_saved": 0, "attachments_skipped": 0,
                 "attachments_errors": 0, "reason": "bad_email"}
+    if stage in _SKIP_STAGES:
+        # v3.8.4: ONBOARDED + OFFER_DECLINED_KEEP 终态分权——不再扫邮件,不进 LLM。
+        return {"inserted": [], "scanned": 0, "skipped_dup": 0,
+                "skipped_junk": 0, "errors": 0,
+                "attachments_saved": 0, "attachments_skipped": 0,
+                "attachments_errors": 0,
+                "skipped_stage": stage}
 
     fetched = _fetch_messages_for_email(imap, cand_email, since_dt)
     inserted = []               # email_id 列表
@@ -372,6 +395,7 @@ def _do_scan(args):
     per_candidate = []
     scanned_total = dup_total = junk_total = err_total = 0
     att_saved_total = att_skipped_total = att_err_total = 0
+    skipped_stage_total = 0  # v3.8.4: ONBOARDED + OFFER_DECLINED_KEEP 跳过的候选人数
     try:
         imap.select("INBOX")
         for cand in candidates:
@@ -383,6 +407,9 @@ def _do_scan(args):
                 err_total += 1
                 continue
             per_candidate.append(res)
+            if res.get("skipped_stage"):
+                skipped_stage_total += 1
+                continue
             inserted_all.extend(res.get("inserted") or [])
             scanned_total += res.get("scanned") or 0
             dup_total += res.get("skipped_dup") or 0
@@ -413,6 +440,7 @@ def _do_scan(args):
         "inserted_ids": inserted_all,
         "skipped_dup": dup_total,
         "skipped_junk": junk_total,
+        "skipped_stage": skipped_stage_total,  # v3.8.4: 终态不再扫的候选人数
         "errors": err_total,
         "attachments_saved": att_saved_total,
         "attachments_skipped": att_skipped_total,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-自动拒（auto_reject）模块 — 笔试超时自动拒+留池（v3.5.11 起；v3.4 起单脚本简化版）。
+自动拒（auto_reject）模块 — 笔试超时自动拒+删档归档（v3.8.3 起）。
 
 ═══════════════════════════════════════════════════════════════════════════════
 模块结构
@@ -8,7 +8,7 @@
 - executor.py                  helpers：
                                  _send_rejection_email → subprocess outbound.cmd_send
                                  _mark_exam_rejected_keep → in-process talent_db.set_current_stage
-- cmd_scan_exam_timeout.py     扫超 N 天未交卷 → 立刻拒信 + 推 EXAM_REJECT_KEEP 留池 + 飞书事后通知
+- cmd_scan_exam_timeout.py     扫超 N 天未交卷 → 立刻拒信 + talent.cmd_delete 物理删档归档 + 飞书事后通知
 
 ═══════════════════════════════════════════════════════════════════════════════
 v3.5.11 (2026-04-22) 重设计：拒+留池替代拒+物理删档

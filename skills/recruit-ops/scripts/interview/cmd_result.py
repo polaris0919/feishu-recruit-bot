@@ -5,19 +5,17 @@
   python3 interview/cmd_result.py --talent-id t_xxx --round 1|2 --result pass|reject_keep|reject_delete [--notes ...]
 
 Round 1 选项：
-  --result pass         → 发笔试邮件
+  --result pass         → 笔试邮件发送成功后推进到 EXAM_SENT
   --result pass_direct  → 跳过笔试直接二面
-  --result reject_delete → 一面未通过，发拒信 + 直接 talent_db.delete_talent()
-                           （v3.6 起不再经停 ROUND1_DONE_REJECT_DELETE 这个"占位 stage"）
+  --result reject_delete → 一面未通过，发拒信 + talent.cmd_delete 归档删档
 
 Round 2 选项：
-  --result pass         → 推到 POST_OFFER_FOLLOWUP + 通知 HR 准备发 offer
+  --result pass         → 推到 POST_OFFER_FOLLOWUP + 提醒老板确认入职前邮件
                            （v3.6 起合并了 OFFER_HANDOFF 瞬时态）
   --result reject_keep  → 二面未通过，保留人才库（ROUND2_DONE_REJECT_KEEP）
-  --result reject_delete → 二面未通过，发拒信 + 直接物理删除
+  --result reject_delete → 二面未通过，发拒信 + talent.cmd_delete 归档删档
   （二面没有 pending：老板未做决定时让候选人停留在 ROUND2_SCHEDULED 即可）
 """
-import os
 import re
 import sys
 
@@ -39,59 +37,34 @@ def _is_valid_email(value):
         return False
     return bool(_EMAIL_RE.match(value.strip()))
 
-from lib.bg_helpers import send_bg_email
+from lib.bg_helpers import send_outbound_template
+from lib.cli_subprocess import run_module
 from lib.core_state import (
     append_audit, ensure_stage_transition, load_candidate, save_candidate,
 )
-from lib.recruit_paths import exam_archive_dir
-from lib.side_effect_guard import side_effects_disabled
-
-
-def _get_exam_attachments():
-    archive = str(exam_archive_dir())
-    exam_files = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "exam_files"))
-    candidates = [
-        os.path.join(archive, "笔试题.tar.gz"),
-        os.path.join(archive, "笔试题.zip"),
-        os.path.join(exam_files, "exam_package.zip"),
-        os.path.join(archive, "笔试题.tar"),
-    ]
-    for path in candidates:
-        if os.path.isfile(path) and os.path.getsize(path) > 0:
-            return [path]
-    return []
 
 
 def _send_exam_email(talent_id, candidate_email, exam_id, candidate_name=""):
-    if side_effects_disabled():
-        return send_bg_email(candidate_email, "", "", tag="round1_exam_invite",
-                             talent_id=talent_id, candidate_name=candidate_name)
-    from email_templates import renderer
-    from email_templates.constants import COMPANY
-    subject, body = renderer.render(
-        "exam_invite",
-        candidate_name=candidate_name or "您",
-        company=COMPANY,
-        talent_id=talent_id,
-    )
-    attachments = _get_exam_attachments()
+    from email_templates.auto_attachments import auto_attachments_for
     try:
-        return send_bg_email(
-            candidate_email,
-            subject,
-            body,
-            tag="round1_exam_invite",
-            attachments=attachments,
-            talent_id=talent_id,
-            candidate_name=candidate_name,
-        )
-    except Exception as e:
-        print("[result] 发邮件失败: {}".format(e), file=sys.stderr)
+        attachments = [str(p) for p in auto_attachments_for("exam_invite")]
+    except RuntimeError as e:
+        print("[result] 笔试题附件缺失，拒绝发邀请：{}".format(e), file=sys.stderr)
         return None
+    res = send_outbound_template(
+        talent_id=talent_id,
+        template="exam_invite",
+        attachments=attachments,
+    )
+    if res.get("ok"):
+        return res
+    print("[result] 发笔试邀请失败: {}".format(
+        res.get("stderr") or res.get("stdout") or res.get("returncode")), file=sys.stderr)
+    return None
 
 
 def _send_rejection_email(talent_id, candidate_email, candidate_name, tag):
-    # type: (str, str, str, str) -> int
+    # type: (str, str, str, str) -> dict
     """手动 reject_delete 时同步发拒信。
 
     历史 gap：2026-04-22 之前 _handle_reject_delete 只删 DB 不发拒信，
@@ -99,28 +72,53 @@ def _send_rejection_email(talent_id, candidate_email, candidate_name, tag):
     的拒信体系，口径统一。
     """
     if not _is_valid_email(candidate_email):
-        return -1
-    if side_effects_disabled():
-        return send_bg_email(candidate_email, "", "", tag=tag,
-                             talent_id=talent_id, candidate_name=candidate_name)
-    from email_templates import renderer
-    from email_templates.constants import COMPANY
-    subject, body = renderer.render(
-        "rejection_generic",
-        candidate_name=candidate_name or "您",
-        company=COMPANY,
+        return {"ok": False, "error": "invalid_email"}
+    res = send_outbound_template(
         talent_id=talent_id,
+        template="rejection_generic",
+        context="rejection",
     )
-    try:
-        return send_bg_email(candidate_email, subject, body,
-                             tag=tag, talent_id=talent_id,
-                             candidate_name=candidate_name)
-    except Exception as e:
-        print("[result] 发拒信失败: {}".format(e), file=sys.stderr)
-        return -1
+    if res.get("ok"):
+        return res
+    print("[result] 发拒信失败: {}".format(
+        res.get("stderr") or res.get("stdout") or res.get("returncode")), file=sys.stderr)
+    return {"ok": False, "error": res.get("stderr") or res.get("stdout") or res.get("returncode")}
 
 
-def _handle_reject_delete(talent_id, round_num, notes, skip_email=False):
+def _cmd_delete(talent_id, reason, actor):
+    # type: (str, str, str) -> dict
+    return run_module(
+        "talent.cmd_delete",
+        [
+            "--talent-id", talent_id,
+            "--confirm-delete-talent", talent_id,
+            "--reason", reason,
+            "--actor", actor,
+            "--json",
+        ],
+        parse_json=True,
+    )
+
+
+def _notify_boss_offer_prompt(cand, talent_id):
+    # type: (dict, str) -> bool
+    from lib import feishu
+    boss_msg = (
+        "[二面通过 · 请确认入职前邮件]\n"
+        "候选人 {name}（{tid}）已通过二面，状态已进入 POST_OFFER_FOLLOWUP。\n"
+        "邮箱：{email}\n\n"
+        "是否现在发送入职前邮件（含实习协议 + 入职信息登记表）？\n"
+        "请提供：\n"
+        "1. 入职时间\n"
+        "2. 开始日薪（默认 350 元/天；如认可默认值可直接说按 350）\n\n"
+        "示例：确认发送，入职时间 2026-06-01，日薪 350。"
+    ).format(
+        name=cand.get("candidate_name", talent_id), tid=talent_id,
+        email=cand.get("candidate_email", "未记录"))
+    return bool(feishu.send_text(boss_msg))
+
+
+def _handle_reject_delete(talent_id, round_num, notes, actor, skip_email=False):
     from lib import talent_db as _tdb
     round_label = "一面" if round_num == 1 else "二面"
 
@@ -128,32 +126,51 @@ def _handle_reject_delete(talent_id, round_num, notes, skip_email=False):
     candidate_email = (cand.get("candidate_email") or "").strip() if cand else ""
     candidate_name = (cand.get("candidate_name") or "").strip() if cand else ""
 
-    email_pid = None
+    email_res = None
     if not skip_email and candidate_email:
-        email_pid = _send_rejection_email(
+        email_res = _send_rejection_email(
             talent_id, candidate_email, candidate_name,
             tag="round{}_reject_delete".format(round_num),
         )
+        if not (isinstance(email_res, dict) and email_res.get("ok")):
+            print(
+                "ERROR: 拒信未发送，未执行删档。detail={}".format(
+                    email_res.get("error") if isinstance(email_res, dict) else email_res),
+                file=sys.stderr,
+            )
+            return 1
 
-    if _tdb._is_enabled():
-        try:
-            _tdb.delete_talent(talent_id)
-        except Exception as e:
-            print("⚠ DB 删除失败: {}".format(e), file=sys.stderr)
+    reason = "{}未通过 reject_delete".format(round_label)
+    if notes:
+        reason += "；{}".format(notes)
+    delete_res = _cmd_delete(talent_id, reason, actor)
+    if not delete_res.get("ok"):
+        print(
+            "ERROR: 删档失败，候选人未确认删除。returncode={} stderr={} stdout={}".format(
+                delete_res.get("returncode"),
+                (delete_res.get("stderr") or "").strip()[:500],
+                (delete_res.get("stdout") or "").strip()[:500],
+            ),
+            file=sys.stderr,
+        )
+        return 1
 
     lines = [
         "[{}结果已记录]".format(round_label),
         "- talent_id: {}".format(talent_id),
         "- 结果: 未通过（已从人才库彻底删除）",
     ]
-    if email_pid is not None and email_pid >= 0:
-        lines.append("- 拒信: 后台发送中（PID={}）".format(email_pid))
+    if isinstance(email_res, dict) and email_res.get("ok"):
+        lines.append("- 拒信: 已发送（message_id={}）".format(
+            email_res.get("message_id") or "?"))
     elif skip_email:
         lines.append("- 拒信: 跳过（--skip-email）")
     elif not candidate_email:
         lines.append("- 拒信: 跳过（候选人无邮箱）")
     if notes:
         lines.append("- 评价: {}".format(notes))
+    if (delete_res.get("json") or {}).get("archive_path"):
+        lines.append("- 归档: {}".format((delete_res.get("json") or {}).get("archive_path")))
     print("\n".join(lines))
     return 0
 
@@ -169,6 +186,18 @@ def parse_args(argv=None):
     p.add_argument("--notes", default="")
     p.add_argument("--skip-email", action="store_true")
     p.add_argument("--actor", default="system")
+
+    # ── v3.8.1 hard guard（事故源 INCIDENT_RULES.md §12 / §13） ────────────
+    # --result reject_delete 等价于 talent.cmd_delete（CLI 内部会发拒信 +
+    # 物理删档），同样不可逆。强制 caller 显式传 --confirm-reject-delete
+    # <talent_id>，且仅当 --result=reject_delete 时才校验。
+    p.add_argument("--confirm-reject-delete",
+                   default=None, metavar="<talent_id>",
+                   help="必填 hard guard（仅当 --result=reject_delete）："
+                        "值必须严格等于 --talent-id。防止 LLM 把自然语言里的"
+                        "'拒了/不要了/删了'误识别为已 confirm。"
+                        "事故源 INCIDENT_RULES.md §12 / §13。")
+
     return p.parse_args(argv or sys.argv[1:])
 
 
@@ -177,6 +206,30 @@ def main(argv=None):
     talent_id = args.talent_id.strip()
     result = args.result
     round_num = args.round
+
+    # ── v3.8.1 hard guard（事故源 INCIDENT_RULES.md §12 / §13） ────────────
+    if result == "reject_delete":
+        if not args.confirm_reject_delete:
+            print(
+                "ERROR: --result reject_delete 缺失 --confirm-reject-delete。\n"
+                "       reject_delete 会发拒信 + 物理删档,不可逆。必须把 talent_id 写两遍才能跑。\n"
+                "       正确用法：interview.cmd_result --talent-id {tid} --round {r} --result reject_delete \\\n"
+                "                  --confirm-reject-delete {tid} ...\n"
+                "       事故源 INCIDENT_RULES.md §12 / §13。"
+                .format(tid=talent_id, r=round_num),
+                file=sys.stderr,
+            )
+            return 1
+        if args.confirm_reject_delete != talent_id:
+            print(
+                "ERROR: --confirm-reject-delete 与 --talent-id 不匹配:\n"
+                "         --talent-id              = {tid}\n"
+                "         --confirm-reject-delete  = {confirm}\n"
+                "       两者必须严格相等。"
+                .format(tid=talent_id, confirm=args.confirm_reject_delete),
+                file=sys.stderr,
+            )
+            return 1
 
     cand = load_candidate(talent_id)
     if not cand:
@@ -201,23 +254,36 @@ def main(argv=None):
                     file=sys.stderr,
                 )
                 return 1
+            if current_stage not in allowed_from:
+                print("ERROR: 阶段 {} 不允许 round1 pass".format(current_stage), file=sys.stderr)
+                return 1
+            exam_id = "exam-{}-{}".format(talent_id, datetime.now().strftime("%Y%m%d%H%M%S"))
+            email_res = None
+            if not args.skip_email:
+                email_res = _send_exam_email(
+                    talent_id, args.email, exam_id, cand.get("candidate_name", ""))
+                if not (isinstance(email_res, dict) and email_res.get("ok")):
+                    print(
+                        "ERROR: 笔试邀请未发送，候选人仍停留在 {}。".format(current_stage),
+                        file=sys.stderr,
+                    )
+                    return 1
             ok = ensure_stage_transition(cand, allowed_from, "EXAM_SENT")
             if not ok:
                 print("ERROR: 阶段 {} 不允许 round1 pass".format(current_stage), file=sys.stderr)
                 return 1
             cand["candidate_email"] = args.email.strip()
-            exam_id = "exam-{}-{}".format(talent_id, datetime.now().strftime("%Y%m%d%H%M%S"))
             cand["exam_id"] = exam_id
             cand["exam_sent_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+08:00")
-            email_pid = None if args.skip_email else _send_exam_email(
-                talent_id, args.email, exam_id, cand.get("candidate_name", ""))
             append_audit(cand, args.actor, "round1_pass_and_exam_invite_sent",
-                         {"email": args.email, "exam_id": exam_id, "email_queued": bool(email_pid), "notes": args.notes})
+                         {"email": args.email, "exam_id": exam_id,
+                          "notes": args.notes, "skip_email": bool(args.skip_email)})
             save_candidate(talent_id, cand)
             if args.skip_email:
                 status = "已跳过"
-            elif email_pid:
-                status = "发送中（后台 PID={}）".format(email_pid)
+            elif isinstance(email_res, dict) and email_res.get("ok"):
+                status = "已发送（message_id={}）".format(
+                    email_res.get("message_id") or "?")
             else:
                 status = "发送失败"
             lines = [
@@ -273,7 +339,7 @@ def main(argv=None):
             if current_stage not in allowed_from:
                 print("ERROR: 阶段 {} 不允许 reject_delete".format(current_stage), file=sys.stderr)
                 return 1
-            return _handle_reject_delete(talent_id, 1, args.notes,
+            return _handle_reject_delete(talent_id, 1, args.notes, args.actor,
                                          skip_email=args.skip_email)
 
     # ── Round 2 ──
@@ -281,7 +347,7 @@ def main(argv=None):
 
     if result == "pass":
         # v3.6 (2026-04-27)：OFFER_HANDOFF 瞬时态合并入 POST_OFFER_FOLLOWUP。
-        # 直接一步推到 POST_OFFER_FOLLOWUP，HR 通知不变（依然 send_text_to_hr）。
+        # v3.9：二面通过后不再立即通知 HR，而是先请老板确认入职前邮件。
         ok = ensure_stage_transition(cand, allowed_from, "POST_OFFER_FOLLOWUP")
         if not ok:
             print("ERROR: 阶段 {} 不允许 round2 pass".format(current_stage), file=sys.stderr)
@@ -289,18 +355,21 @@ def main(argv=None):
         append_audit(cand, args.actor, "round2_pass_enter_post_offer_followup",
                      {"notes": args.notes})
         save_candidate(talent_id, cand)
-        from lib import feishu
-        hr_msg = "[Offer 处理通知]\n候选人 {name}（{tid}）已通过二面\n邮箱：{email}\n请给该候选人发放offer".format(
-            name=cand.get("candidate_name", talent_id), tid=talent_id,
-            email=cand.get("candidate_email", "未记录"))
-        hr_notify_ok = feishu.send_text_to_hr(hr_msg)
-        if not hr_notify_ok:
+        # 飞书是内部提醒：状态已落库后再推送；推送失败不回滚候选人状态。
+        boss_notify_ok = _notify_boss_offer_prompt(cand, talent_id)
+        if not boss_notify_ok:
             print(
-                "WARN: HR Feishu 通知投递失败（候选人 {} 已 round2 pass 但 HR 可能不知情）。"
-                "请手动确认 HR 收到，或用 feishu.send_text_to_hr 重发并记录 hr_offer_reminder_resent 事件。".format(talent_id),
+                "WARN: Boss Feishu 入职前邮件确认提示投递失败（候选人 {} 已 round2 pass）。"
+                "状态已保持 POST_OFFER_FOLLOWUP，不回滚。请手动提醒老板确认入职时间和日薪。".format(talent_id),
                 file=sys.stderr,
             )
-        print("[二面结果已记录]\n- talent_id: {}\n- 结果: 通过\n- 阶段: POST_OFFER_FOLLOWUP（已结束面试流程，等待发放 Offer / 沟通入职）".format(talent_id))
+        print(
+            "[二面结果已记录]\n"
+            "- talent_id: {}\n"
+            "- 结果: 通过\n"
+            "- 阶段: POST_OFFER_FOLLOWUP（已结束面试流程，等待老板确认入职前邮件）\n"
+            "- 下一步: 请老板确认是否发送入职前邮件，并提供入职时间与日薪（默认 350 元/天）"
+            .format(talent_id))
         return 0
 
     elif result == "reject_keep":
@@ -317,7 +386,7 @@ def main(argv=None):
         if current_stage not in allowed_from:
             print("ERROR: 阶段 {} 不允许 reject_delete".format(current_stage), file=sys.stderr)
             return 1
-        return _handle_reject_delete(talent_id, 2, args.notes,
+        return _handle_reject_delete(talent_id, 2, args.notes, args.actor,
                                      skip_email=args.skip_email)
 
 

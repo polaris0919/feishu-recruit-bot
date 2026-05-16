@@ -3,8 +3,8 @@
 
 事故背景：飞书侧 agent 起草的"入职时间确认"邮件，body 含字面 `\\n\\n` 与
 `**...**`，原样进 SMTP（plain text），收件人看到反斜杠 + 字面星号。
-（详见 outbound/cmd_send.py 顶部 _normalize_body 注释；候选人A / t_demo01
-2026-04-22 16:08 邮件 msg_demo_* 是冒烟枪，body_excerpt 在 DB 里还能查到。）
+（详见 outbound/cmd_send.py 顶部 _normalize_body 注释；冯屹哲 / t_59ej9u
+2026-04-22 16:08 邮件 f79581c1-* 是冒烟枪，body_excerpt 在 DB 里还能查到。）
 
 本套测试钉死归一化规则的边界，避免将来手贱误改：
   - 字面 \\n / \\r\\n / \\r / \\t 解码（顺序敏感：\\r\\n 先吃）
@@ -36,12 +36,12 @@ class NormalizeBodyTests(unittest.TestCase):
     # ─── 冒烟枪：完整还原 2026-04-22 16:08 那封"入职时间确认" ────────────
 
     def test_smoking_gun_onboarding_confirm(self):
-        raw = ("候选人A，您好！\\n\\n您可于 **5月6日（周二）上午9点** "
+        raw = ("冯屹哲，您好！\\n\\n您可于 **5月6日（周二）上午9点** "
                "准时入职。\\n\\n如有问题请随时联系。")
         out, stats = _normalize_body(raw)
         self.assertEqual(
             out,
-            "候选人A，您好！\n\n您可于 5月6日（周二）上午9点 准时入职。\n\n如有问题请随时联系.".replace(".", "。"))
+            "冯屹哲，您好！\n\n您可于 5月6日（周二）上午9点 准时入职。\n\n如有问题请随时联系.".replace(".", "。"))
         self.assertEqual(stats["esc_n"], 4)  # 四处 \n
         self.assertEqual(stats["bold"], 1)
         self.assertEqual(stats["esc_t"], 0)
@@ -124,7 +124,7 @@ class NormalizeBodyTests(unittest.TestCase):
     # ─── 幂等 / no-op ────────────────────────────────────────────────────
 
     def test_clean_body_is_noop(self):
-        raw = "候选人A，您好！\n\n感谢您的回复。\n\nHermes 代发"
+        raw = "冯屹哲，您好！\n\n感谢您的回复。\n\nHermes 代发"
         out, stats = _normalize_body(raw)
         self.assertEqual(out, raw)
         self.assertEqual(sum(stats.values()), 0)
@@ -145,19 +145,19 @@ class NormalizeBodyTests(unittest.TestCase):
     # ─── 薄包装：开关行为 ───────────────────────────────────────────────
 
     def test_disabled_skips_normalize(self):
-        raw = "候选人A\\n\\n**5月6日**入职"
+        raw = "冯屹哲\\n\\n**5月6日**入职"
         out = _maybe_normalize_body_inplace(raw, "freeform", enabled=False)
         # enabled=False → 原样返回，连字面转义都不解码
         self.assertEqual(out, raw)
 
     def test_enabled_runs_normalize(self):
-        raw = "候选人A\\n\\n**5月6日**入职"
+        raw = "冯屹哲\\n\\n**5月6日**入职"
         out = _maybe_normalize_body_inplace(raw, "freeform", enabled=True)
-        self.assertEqual(out, "候选人A\n\n5月6日入职")
+        self.assertEqual(out, "冯屹哲\n\n5月6日入职")
 
     def test_enabled_on_clean_body_is_noop(self):
         # 真模板渲染出来的内容跑一遍应当无副作用
-        raw = "亲爱的张三：\n\n邀请您参加笔试。\n\n示例科技公司 HR"
+        raw = "亲爱的张三：\n\n邀请您参加笔试。\n\n致邃投资 HR"
         out = _maybe_normalize_body_inplace(raw, "round1_invite", enabled=True)
         self.assertEqual(out, raw)
 

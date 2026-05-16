@@ -24,13 +24,21 @@ def run():
         name = item.get("candidate_name", tid)
         r1time = item.get("round1_time", "")
         elapsed = item.get("elapsed_minutes", 30)
+        since_last = item.get("minutes_since_reminder")
         elapsed_str = "{}分钟".format(elapsed) if elapsed < 60 else "约{:.1f}小时".format(elapsed / 60)
+        repeat_line = (
+            "上次已催问，距今约{:.1f}小时；因仍未录入结果，继续提醒。\n".format(since_last / 60.0)
+            if since_last is not None else ""
+        )
         msg = (
             "🔔 一面结果催问提醒\n━━━━━━━━━━━━━━━━━━━━\n"
             "候选人：{name}（{tid}）\n预定一面时间：{r1time}\n已过去：{elapsed_str}\n"
+            "提醒规则：一面按 30 分钟计，结束后再缓冲 15 分钟开始催问；未出结果则每 30 分钟重复提醒。\n"
+            "{repeat_line}"
             "━━━━━━━━━━━━━━━━━━━━\n请问一面结果如何？\n"
             "  · 如通过 → 回复：{name} 一面通过\n  · 如拒绝 → 回复：{name} 一面不通过"
-        ).format(tid=tid, name=name, r1time=r1time, elapsed_str=elapsed_str)
+        ).format(tid=tid, name=name, r1time=r1time, elapsed_str=elapsed_str,
+                 repeat_line=repeat_line)
         messages.append(("round1", tid, msg))
 
     round2_pending = talent_db.get_pending_interview_reminders()
@@ -39,13 +47,21 @@ def run():
         name = item.get("candidate_name", tid)
         r2time = item.get("round2_time", "")
         elapsed = item.get("elapsed_minutes", 30)
+        since_last = item.get("minutes_since_reminder")
         elapsed_str = "{}分钟".format(elapsed) if elapsed < 60 else "约{:.1f}小时".format(elapsed / 60)
+        repeat_line = (
+            "上次已催问，距今约{:.1f}小时；因仍未录入结果，继续提醒。\n".format(since_last / 60.0)
+            if since_last is not None else ""
+        )
         msg = (
             "🔔 二面结果催问提醒\n━━━━━━━━━━━━━━━━━━━━\n"
             "候选人：{name}（{tid}）\n预定二面时间：{r2time}\n已过去：{elapsed_str}\n"
+            "提醒规则：二面按 60 分钟计，结束后再缓冲 15 分钟开始催问；未出结果则每 30 分钟重复提醒。\n"
+            "{repeat_line}"
             "━━━━━━━━━━━━━━━━━━━━\n请问二面结果如何？\n"
             "  · 如通过 → 回复：{name} 二面通过\n  · 如拒绝 → 回复：{name} 二面不通过"
-        ).format(tid=tid, name=name, r2time=r2time, elapsed_str=elapsed_str)
+        ).format(tid=tid, name=name, r2time=r2time, elapsed_str=elapsed_str,
+                 repeat_line=repeat_line)
         messages.append(("round2", tid, msg))
 
     if not messages:

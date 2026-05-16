@@ -11,7 +11,7 @@
   「跨 sink 的运维工具」（health_check / db_migrate / replay_notifications）。
 
 【职责（只干这一件）】
-  把一段文本通过 lib.feishu 推到 boss 或 hr。
+  把一段文本通过 lib.feishu 推到 boss / Polaris / hr / 面试官。
     - 无副作用写 DB（纯消息推送）；
     - 支持 stdin 长文本；
     - 支持 --dry-run（只打印不推）；
@@ -77,13 +77,13 @@ def _build_parser():
                    choices=["info", "warn", "error", "critical"])
     p.add_argument("--to", default="boss",
                    choices=[
-                       "boss", "hr",
+                       "boss", "polaris", "hr",
                        # v3.5.7 §5.11 一面派单：把通知直接推给对应面试官
                        "interviewer-master",   # 硕士面试官
                        "interviewer-bachelor", # 本科面试官
                        "interviewer-cpp",      # C++ 面试官
                    ],
-                   help="推给谁（默认 boss）。interviewer-* 由 §5.11 派单 chain 用，"
+                   help="推给谁（默认 boss）。polaris 使用固定日程安排者 open_id；interviewer-* 由 §5.11 派单 chain 用，"
                         "open_id 来自 lib.config['feishu']['interviewer_*_open_id']。")
     p.add_argument("--source", default=None,
                    help="调用方标识（进推送尾部方便排查）")
@@ -113,6 +113,8 @@ def main(argv=None):
     from lib import feishu
     if args.to == "hr":
         ok = feishu.send_text_to_hr(text)
+    elif args.to == "polaris":
+        ok = feishu.send_text_to_polaris(text)
     elif args.to == "interviewer-master":
         ok = feishu.send_text_to_interviewer_master(text)
     elif args.to == "interviewer-bachelor":
