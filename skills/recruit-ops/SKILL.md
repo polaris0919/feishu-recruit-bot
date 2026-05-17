@@ -640,10 +640,10 @@ uv run python3 scripts/feishu/cmd_calendar_create.py \
 ```
 
 ### Verification Checklist:
-✅ Calendar title shows "[一面] Candidate Name" (not talent_id)  
-✅ Event duration is 30 minutes (not 60)  
-✅ Round is correctly labeled as "一面" (not "二面")  
-✅ CV attachment is present  
+✅ Calendar title shows "[一面] Candidate Name" (not talent_id)
+✅ Event duration is 30 minutes (not 60)
+✅ Round is correctly labeled as "一面" (not "二面")
+✅ CV attachment is present
 
 **Common Failure Modes:**
 - Missing `--round 1` → Creates "二面" calendar events incorrectly
@@ -660,7 +660,7 @@ When refreshing existing interview schedules (e.g., to update CV attachments or 
 uv run python3 scripts/talent/cmd_show.py --talent-id <TALENT_ID> --json
 ```
 
-**Step 2: Get interviewer assignment**  
+**Step 2: Get interviewer assignment**
 ```bash
 # Determine the correct interviewer for this candidate
 uv run python3 scripts/intake/cmd_route_interviewer.py --talent-id <TALENT_ID> --json

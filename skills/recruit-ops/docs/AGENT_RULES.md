@@ -582,7 +582,7 @@ run_chain(steps)
 
 > stage = `EXAM_REVIEWED`，老板拍板通过 + 给二面时间。
 > 如果老板只说"笔试通过 / 安排二面"但没给时间，agent **只能问二面候选邀请时间**，不能输出"确认后建日历 / 更新 `ROUND2_SCHEDULED`"这类旧流程承诺。正确澄清话术必须说明：收到时间后只会发二面邀请并进入 `ROUND2_SCHEDULING`；候选人回信 confirm 后，还要老板再次明确授权才建日历并进入 `ROUND2_SCHEDULED`。
-> 如果老板已经给了时间，agent 的 propose 也**只能**覆盖下面这条 §4.5：发送 `round2_invite` + 推到 `ROUND2_SCHEDULING`。确认回复（如"确认安排 黄琪 2026-05-20 15:00"）只授权发二面邀请，**不授权**建日历，也**不授权** `ROUND2_SCHEDULED`。禁止把 §4.5 和 §4.2 合并成一次 confirm。
+> 如果老板已经给了时间，agent 的 propose 也**只能**覆盖下面这条 §4.5：发送 `round2_invite` + 推到 `ROUND2_SCHEDULING`。确认回复（如"确认安排 候选甲 2026-05-20 15:00"）只授权发二面邀请，**不授权**建日历，也**不授权** `ROUND2_SCHEDULED`。禁止把 §4.5 和 §4.2 合并成一次 confirm。
 
 ```python
 run_chain([

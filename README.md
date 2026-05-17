@@ -61,6 +61,7 @@
   - 扫描候选人回信
   - LLM 识别确认 / 改期 / 不明确意图
   - 最终由老板确认后再创建 Feishu 日历
+  - 二面确认有硬护栏：任何路径都必须先进入 `ROUND2_SCHEDULING`，候选人确认后再由老板明确授权建日历，不能从笔试 / 一面 / WAIT_RETURN 等阶段直达 `ROUND2_SCHEDULED`
 - **笔试流转**
   - 自动识别候选人答题回复
   - 预审与结果流转
@@ -189,33 +190,18 @@ pip install -e .
 ### 3. 初始化数据库
 
 ```bash
-# 1) Fresh install：跑终态 DDL（含 recruit_migrations 记账表）
+# Fresh install：跑终态 DDL。
+# schema.sql 已内置历史迁移记账初始化，不需要手工粘贴旧迁移列表。
 psql "$DATABASE_URL" -f skills/recruit-ops/scripts/lib/migrations/schema.sql
 
-# 2) 把所有「已被 schema.sql 内联兼容」的历史迁移标记为 applied，
-#    避免 cmd_db_migrate 重跑历史增量。schema.sql 末尾有 INSERT 模板，
-#    打开注释执行即可；或直接：
-psql "$DATABASE_URL" -c "INSERT INTO recruit_migrations (filename, notes) \
-  SELECT regexp_replace(name,'^.*/',''), 'pre-seeded by schema.sql' \
-  FROM (VALUES \
-    ('20260417_v33_talent_emails_extend.sql'), \
-    ('20260421_v35_drop_dead_columns.sql'), \
-    ('20260422_v3511_talent_emails_context_rejection.sql'), \
-    ('20260423_drop_pending_rejection_id.sql'), \
-    ('20260424_v356_talent_emails_attachments.sql'), \
-    ('20260425_v357_talents_has_cpp.sql'), \
-    ('20260427_v36_drop_offer_handoff.sql'), \
-    ('20260428_v36_drop_done_reject_delete.sql'), \
-    ('20260510_v38_add_onboarded_stage.sql'), \
-    ('20260511_v382_offer_declined_keep.sql') \
-  ) AS t(name) ON CONFLICT (filename) DO NOTHING;"
-
-# 3) 后续每次新增迁移：开发者放一个 YYYYMMDD_*.sql 到 lib/migrations/，
-#    运维侧只需：
+# 后续每次新增迁移：开发者放一个 YYYYMMDD_*.sql 到 lib/migrations/，
+# 运维侧只需：
 cd skills/recruit-ops
 PYTHONPATH=scripts uv run python3 -m ops.cmd_db_migrate --status   # 查 pending
 PYTHONPATH=scripts uv run python3 -m ops.cmd_db_migrate --apply    # 跑 pending
 ```
+
+`schema.sql` 是当前数据库终态定义，已经包含历史迁移效果，也会把这些已内联的历史迁移预记为 applied。之后只有新放进 `lib/migrations/` 的增量 SQL 才需要通过 `ops.cmd_db_migrate` 执行。
 
 ---
 
@@ -313,7 +299,7 @@ export RECRUIT_SUPPRESS_SELF_VERIFY_ALERT=1
 
 ```bash
 cd skills/recruit-ops
-uv run python3 scripts/common/cmd_status.py --all
+PYTHONPATH=scripts uv run python3 -m common.cmd_status --all
 ```
 
 如果数据库里还没有数据，至少应能看到脚本正常启动，而不是 import 错误。
@@ -322,7 +308,7 @@ uv run python3 scripts/common/cmd_status.py --all
 
 ```bash
 cd skills/recruit-ops
-uv run python3 scripts/intake/cmd_new_candidate.py --template "$(cat <<'EOF'
+PYTHONPATH=scripts uv run python3 -m intake.cmd_new_candidate --template "$(cat <<'EOF'
 【新候选人】
 姓名：张三
 邮箱：zhangsan@example.com
@@ -333,21 +319,29 @@ EOF
 ### 3. 安排一面
 
 ```bash
-uv run python3 scripts/round1/cmd_round1_schedule.py \
+PYTHONPATH=scripts uv run python3 -m outbound.cmd_send \
   --talent-id t_xxxxx \
-  --time "2026-04-20 09:30"
+  --template round1_invite \
+  --vars round1_time="2026-04-20 09:30" interviewer="老板"
+
+PYTHONPATH=scripts uv run python3 -m talent.cmd_update \
+  --talent-id t_xxxxx \
+  --stage ROUND1_SCHEDULING \
+  --set round1_time="2026-04-20 09:30" \
+  --set round1_invite_sent_at=__NOW__
 ```
 
 ### 4. 查看指定日期面试安排
 
 ```bash
-uv run python3 scripts/common/cmd_today_interviews.py --date 2026-04-20
+PYTHONPATH=scripts uv run python3 -m common.cmd_today_interviews --date 2026-04-20
 ```
 
 ### 5. 扫描候选人回复
 
 ```bash
-uv run python3 scripts/exam/daily_exam_review.py --interview-confirm-only
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_scan
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_analyze
 ```
 
 ---
@@ -360,28 +354,28 @@ uv run python3 scripts/exam/daily_exam_review.py --interview-confirm-only
 cd skills/recruit-ops
 
 # 查看全部候选人
-uv run python3 scripts/common/cmd_status.py --all
+PYTHONPATH=scripts uv run python3 -m common.cmd_status --all
 
 # 查单个候选人
-uv run python3 scripts/common/cmd_status.py --talent-id t_xxxxx
+PYTHONPATH=scripts uv run python3 -m common.cmd_status --talent-id t_xxxxx
 
 # 搜索候选人
-uv run python3 scripts/common/cmd_search.py --query 张三
+PYTHONPATH=scripts uv run python3 -m common.cmd_search --query 张三
 
 # 查看今天/某天面试
-uv run python3 scripts/common/cmd_today_interviews.py
-uv run python3 scripts/common/cmd_today_interviews.py --date 2026-04-20
+PYTHONPATH=scripts uv run python3 -m common.cmd_today_interviews
+PYTHONPATH=scripts uv run python3 -m common.cmd_today_interviews --date 2026-04-20
 
 # 记录一面结果
-uv run python3 scripts/interview/cmd_result.py \
+PYTHONPATH=scripts uv run python3 -m interview.cmd_result \
   --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
 
 # 记录笔试结果
-uv run python3 scripts/exam/cmd_exam_result.py \
+PYTHONPATH=scripts uv run python3 -m exam.cmd_exam_result \
   --talent-id t_xxxxx --result pass --round2-time "2026-04-22 14:00"
 
 # 记录二面结果
-uv run python3 scripts/interview/cmd_result.py \
+PYTHONPATH=scripts uv run python3 -m interview.cmd_result \
   --talent-id t_xxxxx --round 2 --result pass
 ```
 
@@ -421,7 +415,7 @@ uv run python3 scripts/interview/cmd_result.py \
 
 ```bash
 cd skills/recruit-ops
-uv run python3 scripts/common/cmd_status.py --all
+PYTHONPATH=scripts uv run python3 -m common.cmd_status --all
 ```
 
 ### 方式二：Hermes / Agent gateway + Skill
@@ -443,10 +437,10 @@ PYTHONPATH=scripts ./.venv/bin/python -m cron.cron_runner
 
 常见子任务：
 
-- `daily_exam_review.py --auto --exam-only`
-- `daily_exam_review.py --auto --interview-confirm-only`
-- `daily_exam_review.py --auto --reschedule-scan-only`
-- `common/cmd_interview_reminder.py`
+- `inbox.cmd_scan`
+- `inbox.cmd_analyze`
+- `auto_reject.cmd_scan_exam_timeout --auto`
+- `common.cmd_interview_reminder`
 
 ---
 

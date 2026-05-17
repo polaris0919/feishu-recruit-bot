@@ -286,7 +286,7 @@ class TestDbFallback(unittest.TestCase):
         """导入候选人时 DB 已配置，应同步并显示已同步。"""
         out, err, rc = call_main("cmd_import_candidate", [
             "--template",
-            "【导入候选人】\n姓名：黄琪\n邮箱：2511391@tongji.edu.cn\n当前阶段：待安排二面"
+            "【导入候选人】\n姓名：候选甲\n邮箱：candidate-b@example.com\n当前阶段：待安排二面"
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("已同步", out)

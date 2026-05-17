@@ -387,8 +387,8 @@ COMMENT ON COLUMN talents.has_cpp IS
 -- ops.cmd_db_migrate 会在首次运行时 CREATE IF NOT EXISTS。这里把它入 schema.sql
 -- 一是让 fresh install 端口对齐, 二是给未来新的增量迁移记账。
 -- v3.8.7 (2026-05-16) 清盘后, lib/migrations/ 顶层只剩 schema.sql 一个文件,
--- cmd_db_migrate --status 永远返回 pending=0; 这张表先空着,
--- 等下次有真正的增量迁移再开始记账。
+-- cmd_db_migrate --status 永远返回 pending=0; 下方会把已内联进 schema.sql 的
+-- 历史迁移预记为 applied, 避免未来恢复/新增增量迁移时误重跑历史文件。
 CREATE TABLE IF NOT EXISTS recruit_migrations (
     filename     TEXT PRIMARY KEY,
     applied_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -398,4 +398,20 @@ CREATE TABLE IF NOT EXISTS recruit_migrations (
 COMMENT ON TABLE recruit_migrations IS
     'v3.8.5: 增量迁移记账表。ops.cmd_db_migrate --apply 每跑一个迁移文件就 INSERT 一行；'
     '--status 列出 pending/applied。schema.sql 自身不进表（手维护的终态 DDL）。'
-    'v3.8.7 后历史增量迁移已全部内联进 schema.sql 并删档, 该表对 fresh install 是空表。';
+    'v3.8.7 后历史增量迁移已全部内联进 schema.sql 并预记账, fresh install 后只会看到未来新增迁移为 pending。';
+
+INSERT INTO recruit_migrations (filename, notes)
+SELECT name, 'pre-seeded by schema.sql'
+FROM (VALUES
+    ('20260417_v33_talent_emails_extend.sql'),
+    ('20260421_v35_drop_dead_columns.sql'),
+    ('20260422_v3511_talent_emails_context_rejection.sql'),
+    ('20260423_drop_pending_rejection_id.sql'),
+    ('20260424_v356_talent_emails_attachments.sql'),
+    ('20260425_v357_talents_has_cpp.sql'),
+    ('20260427_v36_drop_offer_handoff.sql'),
+    ('20260428_v36_drop_done_reject_delete.sql'),
+    ('20260510_v38_add_onboarded_stage.sql'),
+    ('20260511_v382_offer_declined_keep.sql')
+) AS t(name)
+ON CONFLICT (filename) DO NOTHING;

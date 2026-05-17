@@ -262,7 +262,7 @@ class TestConfirmInterviewStageOverride(unittest.TestCase):
         from inbox import cmd_analyze
         row = self._fake_email_row("EXAM_SENT")
         row["attachments"] = [{
-            "name": "黄琪笔试答案.zip",
+            "name": "候选甲笔试答案.zip",
             "mime": "application/zip",
             "size": 895905,
             "path": "candidates/t_exam/exam_answer/answer.zip",
@@ -285,10 +285,10 @@ class TestConfirmInterviewStageOverride(unittest.TestCase):
 
         payload = set_analyzed.call_args.kwargs["ai_payload"]
         self.assertTrue(payload["details"]["has_attachment"])
-        self.assertEqual(payload["details"]["attachments"][0]["name"], "黄琪笔试答案.zip")
+        self.assertEqual(payload["details"]["attachments"][0]["name"], "候选甲笔试答案.zip")
         self.assertIn("已回复笔试邮件并附上笔试答案附件", payload["summary"])
         text = feishu_mock.call_args.args[0]
-        self.assertIn("附件：黄琪笔试答案.zip", text)
+        self.assertIn("附件：候选甲笔试答案.zip", text)
         self.assertTrue(res["exam_review_ok"])
 
     def test_exam_submitted_no_feishu_still_saves_event_without_review_push(self):

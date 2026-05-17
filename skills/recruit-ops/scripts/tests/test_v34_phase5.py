@@ -51,7 +51,7 @@ class TestCmdCalendarCreate(unittest.TestCase):
         from tests.helpers import mem_tdb
         mem_tdb.upsert_one("t_iv_master", {
             "talent_id": "t_iv_master",
-            "candidate_name": "黄琪",
+            "candidate_name": "候选甲",
             "candidate_email": "huangqi@example.com",
             "education": "博士",
             "has_cpp": False,
@@ -78,7 +78,7 @@ class TestCmdCalendarCreate(unittest.TestCase):
             _cfg._cache["feishu"] = saved
         self.assertEqual(rc, 0, "stderr=" + err)
         payload = json.loads(out.strip().splitlines()[-1])
-        self.assertEqual(payload["candidate_name"], "黄琪")
+        self.assertEqual(payload["candidate_name"], "候选甲")
         self.assertEqual(payload["candidate_email"], "huangqi@example.com")
         self.assertEqual(payload["extra_attendees"], ["ou_master_real"])
         self.assertEqual(payload["route"]["interviewer_roles"], ["master"])
@@ -327,7 +327,7 @@ class TestCalendarCvAttachment(unittest.TestCase):
                 talent_id="t_attendees",
                 interview_time="2026-04-25 14:00",
                 round_num=1,
-                candidate_name="黄琪",
+                candidate_name="候选甲",
                 extra_attendee_open_ids=["ou_master"],
                 duration_minutes=30,
                 attach_cv=False,
@@ -356,7 +356,7 @@ class TestCalendarCvAttachment(unittest.TestCase):
                 talent_id="t_round2_attendees",
                 interview_time="2026-04-25 14:00",
                 round_num=2,
-                candidate_name="黄琪",
+                candidate_name="候选甲",
                 attach_cv=False,
             )
 

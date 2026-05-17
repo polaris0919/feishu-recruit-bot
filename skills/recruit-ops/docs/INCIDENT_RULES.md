@@ -25,7 +25,7 @@ last_updated: 2026-05-16
 
 ## 16. 2026-05-11 — 两条 inbound 路径分权（候选人 confirm + 终态扫描）
 
-**版本**：v3.8.4 修订（产品复盘场景 8 + 场景 12 后的两点分权决策）  
+**版本**：v3.8.4 修订（产品复盘场景 8 + 场景 12 后的两点分权决策）
 **触发背景**：上一轮 14 场景对照检查发现两处实现与产品语义不齐：
 
 1. **场景 8（"老板最后确认面试时间已安排好"）**：v3.8.1~v3.8.3 期间候选人发 `confirm_interview` 邮件被 §1.1 白名单判作"低风险写动作",`inbox.cmd_analyze` 默认 `need_boss_action=false` → agent 直接跑 §4.2 chain 建日历 + 升级 stage。产品意图是"建日历这一最终确认动作必须老板拍板"——候选人发的时间可能跟老板/HR 已知的其他安排冲突,这一步不应由候选人邮件单方面驱动 agent 写动作。
@@ -79,11 +79,11 @@ last_updated: 2026-05-16
 
 ## 15. 2026-05-11 — cron auto_reject 从"留池"回退到物理删档
 
-**版本**：v3.8.3 回退（v3.5.11 决策反转）  
+**版本**：v3.8.3 回退（v3.5.11 决策反转）
 **触发背景**：产品复盘"笔试 3 天 DDL 自动拒"场景时，发现 v3.5.11 主动收紧把这条 cron 路径从"拒信 + `talent.cmd_delete` 物理删档"改成了"拒信 + 推 `EXAM_REJECT_KEEP` 留池"——这是 §2(2026-04-22) 那次事故的**应激修复**，但当时**留池**这一改动只是事故防御的副产物，并不是产品意图。
 
 **事故面回顾（§2 同一事故，从本规则视角）**：v3.5 前的 cron 流程本来就是"先发拒信 → 立刻 `talent.cmd_delete`"。事故源是：
-1. `outbound.cmd_send` 实际**已经把拒信发出去了**（SMTP 200 OK），  
+1. `outbound.cmd_send` 实际**已经把拒信发出去了**（SMTP 200 OK），
 2. 但回写 `talent_emails` 失败——因为 DB CHECK constraint 不接受 `context='rejection'`（Python 端 `_EMAIL_VALID_CONTEXTS` 也漏了这个值）；
 3. executor 把这个**写库**失败误判成**发邮件**失败，于是没执行后续的 `talent.cmd_delete`；
 4. 候选人继续留在 `EXAM_SENT`，下个 cron tick 又被扫到，**重发**了第二封拒信。
@@ -131,7 +131,7 @@ v3.5.11 当时做了**两件事**：
 
 ## 14. 2026-05-11 — 拒 offer 留池语义混桶（OFFER_DECLINED_KEEP 拆出）
 
-**版本**：v3.8.2 修复  
+**版本**：v3.8.2 修复
 **触发现象**：老板查 `talent.cmd_list --stage ROUND2_DONE_REJECT_KEEP` 看到 5 个候选人，发现里面**两类完全不同语义的人**被混在同一个桶：
 - **真·二面失败留池**（2 人，t_d03noa / t_hpj6br，2026-04-14）：经 `interview.cmd_result --round 2 --result reject_keep` 推过来，audit action=`round2_reject_keep`。
 - **拒 Offer 留池**（3 人，t_lmu39m / t_z04u9v / t_256klz，2026-05-10）：是 §13 误删事故复发后由 `tools/restore_3_offer_decline_candidates.py` 恢复时，按当时 §4.13 POST_OFFER_FOLLOWUP 分支让 agent 跑 `talent.cmd_update --stage ROUND2_DONE_REJECT_KEEP --force --reason "拒绝offer但保留在人才库"` 强制推过来的。
@@ -173,9 +173,9 @@ v3.5.11 当时做了**两件事**：
 
 ## 1. 2026-04-23 — 自动拒"12h 软缓冲队列"全部移除
 
-**版本**：v3.5.13 简化  
-**触发现象**：之前 agent 反复纠结"老板会不会取消队列里的待删项 / 这个候选人是不是合法改期 / 12h 窗口算到几点"。LLM 在多步缓冲逻辑里频繁出错。  
-**根因**：自动拒只有一种合理形态——笔试超时无回复。其它"自动拒"场景（迟到改期、面试缺席等）人工判断更可靠，软缓冲队列的复杂度收益为负。  
+**版本**：v3.5.13 简化
+**触发现象**：之前 agent 反复纠结"老板会不会取消队列里的待删项 / 这个候选人是不是合法改期 / 12h 窗口算到几点"。LLM 在多步缓冲逻辑里频繁出错。
+**根因**：自动拒只有一种合理形态——笔试超时无回复。其它"自动拒"场景（迟到改期、面试缺席等）人工判断更可靠，软缓冲队列的复杂度收益为负。
 **现行规则**：
 
 - `auto_reject/` 当前**只有一个**脚本：`cmd_scan_exam_timeout.py`（cron 专用；agent 只跑 `--dry-run` 预览）。
@@ -190,9 +190,9 @@ v3.5.11 当时做了**两件事**：
 
 ## 2. 2026-04-22 — `reject_delete` 默认必须发拒信
 
-**版本**：v3.5.x 修复  
-**触发现象**：候选人被 `reject_delete` 删档但完全没收到拒信通知。  
-**根因**：旧版 `interview/cmd_result.py --result reject_delete` 没有自动发拒信的副作用；老板默认它会发，agent 也以为它会发。  
+**版本**：v3.5.x 修复
+**触发现象**：候选人被 `reject_delete` 删档但完全没收到拒信通知。
+**根因**：旧版 `interview/cmd_result.py --result reject_delete` 没有自动发拒信的副作用；老板默认它会发，agent 也以为它会发。
 **现行规则**：
 
 - `interview.cmd_result --result reject_delete` 与 `exam.cmd_exam_result --result reject_delete` **副作用**：自动先发 `rejection_generic.txt` 拒信，再删人。
@@ -205,9 +205,9 @@ v3.5.11 当时做了**两件事**：
 
 ## 3. 2026-04-21 17:06 — 跨 stage 跳跃误走正常流程事故
 
-**版本**：v3.5.4 修复  
-**触发现象**：老板说"直接进 ROUND2_SCHEDULED"，agent 试图按"走完整一面流程再到二面"那条路推进，结果真发了一面邀请邮件给候选人——邮件不可撤回。  
-**根因**：agent 把"直接跳到 X"当成"按正常流程推到 X"。语义上的跨 stage 跳跃**不是**业务流程的一步，它是修正状态机的一次性补丁。  
+**版本**：v3.5.4 修复
+**触发现象**：老板说"直接进 ROUND2_SCHEDULED"，agent 试图按"走完整一面流程再到二面"那条路推进，结果真发了一面邀请邮件给候选人——邮件不可撤回。
+**根因**：agent 把"直接跳到 X"当成"按正常流程推到 X"。语义上的跨 stage 跳跃**不是**业务流程的一步，它是修正状态机的一次性补丁。
 **现行规则**：
 
 - 当老板说出**带跨 stage 跳跃语义**的指令——`直接跳到 X` / `直接进 X 阶段` / `略过` / `跳过` / `强制` / `忽略前置` 等——**唯一**正确路径是 [AGENT_RULES.md §4.9 force-jump 单步 chain](AGENT_RULES.md#49-老板说直接跳到-x--§59-force-jump-单步)：
@@ -226,8 +226,8 @@ v3.5.11 当时做了**两件事**：
 
 ## 4. v3.5.10 — "完整信息"被两个空标题敷衍事故
 
-**触发现象**：老板问"把 X 的完整信息 / 档案 / 全部资料发给我"，agent 回复只贴了两个空标题（`📋 候选人档案` / `📂 文件状态`）外加一行 `cv_path`，就声称"信息已同步"。  
-**根因**：agent 把"完整信息"理解成了一个语义模板，而不是 `talent.cmd_show` 输出的字段全集。  
+**触发现象**：老板问"把 X 的完整信息 / 档案 / 全部资料发给我"，agent 回复只贴了两个空标题（`📋 候选人档案` / `📂 文件状态`）外加一行 `cv_path`，就声称"信息已同步"。
+**根因**：agent 把"完整信息"理解成了一个语义模板，而不是 `talent.cmd_show` 输出的字段全集。
 **现行规则**：
 
 - "完整信息" / "档案" / "全部资料" = `talent.cmd_show <id>` 输出里**所有非空字段一项不漏**；
@@ -241,8 +241,8 @@ v3.5.11 当时做了**两件事**：
 
 ## 5. v3.5.10 — `doc_<hex>_` 前缀污染 cv_path 事故
 
-**触发现象**：飞书 Gateway 把附件落盘时给文件名加了 `doc_<hex>_` 前缀，agent 直接把这个前缀写进了 `cv/` 目录与 `talents.cv_path`。后续邮件发 CV 时附件名也带前缀，候选人收到一个奇怪文件名。  
-**根因**：Gateway 加前缀是为了避免本地碰撞，但前缀对外不应可见；旧代码没处理。  
+**触发现象**：飞书 Gateway 把附件落盘时给文件名加了 `doc_<hex>_` 前缀，agent 直接把这个前缀写进了 `cv/` 目录与 `talents.cv_path`。后续邮件发 CV 时附件名也带前缀，候选人收到一个奇怪文件名。
+**根因**：Gateway 加前缀是为了避免本地碰撞，但前缀对外不应可见；旧代码没处理。
 **现行规则**：
 
 - `lib.candidate_storage.import_cv` 已自动剥前缀（任何形如 `doc_[0-9a-f]+_<filename>` 的文件名都会被 normalize）。
@@ -255,8 +255,8 @@ v3.5.11 当时做了**两件事**：
 
 ## 6. v3.5 — `data/followup_pending/` 文件队列彻底废弃
 
-**触发现象**：旧版本用磁盘文件夹（`data/followup_pending/` / `data/followup_archive/`）作为"待跟进"队列；agent 偶尔会"列出 pending 文件夹里有谁"，但磁盘文件早已删除，列出结果不一致。  
-**根因**：v3.5 把所有 follow-up 状态合并进 `talent_emails.status` / `ai_payload` / `replied_by_email_id` 字段，磁盘队列只是过渡期方案。  
+**触发现象**：旧版本用磁盘文件夹（`data/followup_pending/` / `data/followup_archive/`）作为"待跟进"队列；agent 偶尔会"列出 pending 文件夹里有谁"，但磁盘文件早已删除，列出结果不一致。
+**根因**：v3.5 把所有 follow-up 状态合并进 `talent_emails.status` / `ai_payload` / `replied_by_email_id` 字段，磁盘队列只是过渡期方案。
 **现行规则**：
 
 - **不要**引用 `data/followup_pending/` / `data/followup_archive/`——这些目录已不存在。
@@ -269,9 +269,9 @@ v3.5.11 当时做了**两件事**：
 
 ## 7. v3.4 → v3.5 — 业务剧本包装层全部移除
 
-**版本**：v3.5 重构  
-**触发现象**：旧版有一组"业务剧本"包装脚本（`cmd_round1_schedule` / `round2/` 整目录 / `followup/` 整目录 / `cmd_reschedule` / `cmd_defer` / `daily_exam_review` / `exam_ai_reviewer` / `cmd_finalize_interview_time` / `cmd_wait_return_resume` / `cmd_reschedule_request` / `ops/cmd_push_alert`），LLM prompt 历史里仍可能出现这些名字。  
-**根因**：包装脚本掩盖了原子动作的副作用；agent 调用一次就可能同时改 DB + 发邮件 + 建日历，confirm 协议失效。  
+**版本**：v3.5 重构
+**触发现象**：旧版有一组"业务剧本"包装脚本（`cmd_round1_schedule` / `round2/` 整目录 / `followup/` 整目录 / `cmd_reschedule` / `cmd_defer` / `daily_exam_review` / `exam_ai_reviewer` / `cmd_finalize_interview_time` / `cmd_wait_return_resume` / `cmd_reschedule_request` / `ops/cmd_push_alert`），LLM prompt 历史里仍可能出现这些名字。
+**根因**：包装脚本掩盖了原子动作的副作用；agent 调用一次就可能同时改 DB + 发邮件 + 建日历，confirm 协议失效。
 **现行规则**：
 
 - 任何包装脚本都**已不存在**——不要再提议它们。
@@ -284,7 +284,7 @@ v3.5.11 当时做了**两件事**：
 
 ## 8. v3.5 → v3.8.7 — `cmd_parse_cv.py` 删除，解析搬 `lib/cv_parser.py`
 
-**触发现象**：旧版 `cmd_parse_cv.py` 仅解析不去重，导致同一个候选人多份记录。  
+**触发现象**：旧版 `cmd_parse_cv.py` 仅解析不去重，导致同一个候选人多份记录。
 **现行规则**：
 
 - 永远用 `intake.cmd_ingest_cv.py`（解析 + 去重 + 生成预览 payload）；
@@ -323,7 +323,7 @@ v3.5.11 当时做了**两件事**：
 
 ## 9. v3.5 — `exam.fetch_exam_submission` 重拉行为废弃
 
-**触发现象**：agent 看到候选人提交笔试后，会跑 `exam.fetch_exam_submission` 想"重拉一次确保完整"，但 `inbox.cmd_scan` 已经在每次扫到候选人新邮件时自动落盘附件了，重拉只会撞 IMAP 配额并制造副本。  
+**触发现象**：agent 看到候选人提交笔试后，会跑 `exam.fetch_exam_submission` 想"重拉一次确保完整"，但 `inbox.cmd_scan` 已经在每次扫到候选人新邮件时自动落盘附件了，重拉只会撞 IMAP 配额并制造副本。
 **现行规则**：
 
 - 候选人附件由 `inbox.cmd_scan` 自动落盘到 `data/candidates/<tid>/{exam_answer|email}/em_<eid>/`；
@@ -336,7 +336,7 @@ v3.5.11 当时做了**两件事**：
 
 ## 10. v3.4 之前 — 旧 stage 名（带 `_DONE_` / `OFFER_HANDOFF`）已合并
 
-**触发现象**：agent prompt 历史里偶见 `OFFER_HANDOFF` 一类 stage 名，但当前 `core_state.py::STAGE_LABELS` 里查无此名。  
+**触发现象**：agent prompt 历史里偶见 `OFFER_HANDOFF` 一类 stage 名，但当前 `core_state.py::STAGE_LABELS` 里查无此名。
 **现行规则**：
 
 - stage 标签的**唯一**真源是 `scripts/lib/core_state.py::STAGE_LABELS`；
@@ -407,7 +407,7 @@ v3.5.11 当时做了**两件事**：
 
 ## 11. v3.5.13 — 默认时间格式硬规定 Asia/Shanghai
 
-**触发现象**：早期 agent 在不同回复里用过 `+08:00`、`UTC+8`、`Asia/Shanghai` 三种写法，导致 `cmd_calendar_create` 偶尔接收到不预期的时区串。  
+**触发现象**：早期 agent 在不同回复里用过 `+08:00`、`UTC+8`、`Asia/Shanghai` 三种写法，导致 `cmd_calendar_create` 偶尔接收到不预期的时区串。
 **现行规则**：
 
 - 任何 `--time` 参数**必须**是 `YYYY-MM-DD HH:MM` 格式 + Asia/Shanghai 隐式时区（这是 `core_state.py` 打时间戳时用的服务器硬时区）；

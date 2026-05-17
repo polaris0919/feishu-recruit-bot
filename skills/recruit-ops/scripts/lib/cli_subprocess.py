@@ -49,7 +49,7 @@ def build_subprocess_env():
       - RECRUIT_WORKSPACE_ROOT 缺省值 = workspace_path(), 让 atomic CLI
         在脱离 git 上下文(systemd / cron)时也能定位仓库根
 
-    其他副作用开关 (RECRUIT_DRY_RUN 等) 由 os.environ.copy() 自然透传, 
+    其他副作用开关 (RECRUIT_DRY_RUN 等) 由 os.environ.copy() 自然透传,
     本函数不主动注入也不主动剥离。
     """
     env = os.environ.copy()

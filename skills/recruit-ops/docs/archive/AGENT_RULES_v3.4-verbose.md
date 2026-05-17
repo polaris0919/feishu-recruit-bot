@@ -71,7 +71,7 @@
 `inbox.cmd_analyze` 输出（写在 `talent_emails.ai_payload`）：
 
 ```
-{ "intent": "<one of intents>", 
+{ "intent": "<one of intents>",
   "summary": "<≤30 字>",
   "urgency": "low|normal|high",
   "need_boss_action": true|false,
@@ -844,4 +844,3 @@ agent 只需关心 chain 结果对象 `chain_result["ok"]` / `chain_result["fail
 - 删一个 atomic CLI：先在本文 §4 划掉，再去删脚本，最后跑 `tests/run_all.py` 验证。
 - 改 intent 集合：先改 `prompts/inbox_general.json` 里的 `valid_intents`；再改 `inbox/analyzer.py` 的
 `_NEED_BOSS_INTENTS`；最后在本文 §3 矩阵补一行规则。
-
