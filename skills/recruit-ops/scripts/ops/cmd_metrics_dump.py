@@ -131,7 +131,7 @@ def _heartbeat_age_minutes():
     画曲线。文件不存在或解析失败返回 -1 (避免与"刚跑过 0 分钟"歧义)。
     """
     from pathlib import Path
-    path = Path("/home/admin/recruit-workspace/data/.cron_heartbeat")
+    path = Path("<RECRUIT_WORKSPACE>/data/.cron_heartbeat")
     if not path.is_file():
         return -1.0
     try:

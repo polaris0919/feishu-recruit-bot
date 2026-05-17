@@ -11,7 +11,7 @@
   1. List[str] —— 相对 `data_root()` 的固定路径列表（典型：onboarding_offer）。
      文件 **必须存在**，否则 `auto_attachments_for()` 抛 RuntimeError，fail-fast：
      offer 邮件没带合同发出去比晚发几分钟严重得多。
-     路径相对 `RECRUIT_DATA_ROOT`（默认 /home/admin/recruit-workspace/data），
+     路径相对 `RECRUIT_DATA_ROOT`（默认 <RECRUIT_WORKSPACE>/data），
      HR 想换文件 / 换版本：直接把同名文件覆盖即可，不必改代码。
 
   2. Callable[[], List[Path]] —— 动态 resolver，返回绝对路径列表（典型：exam_invite）。

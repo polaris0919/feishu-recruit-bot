@@ -7,7 +7,7 @@
   3. ensure_candidate_dirs：幂等 / 失败兜成 error 字段（不抛）/ dry-run 不动盘
   4. import_cv：move / copy / 重名加 (2) / 已在目标目录 no-op / 幂等同文件
   5. _validate_talent_id：拒空 / 路径分隔符 / .开头
-  6. RECRUIT_DATA_ROOT env 隔离：测试不污染 /home/admin/recruit-workspace/data
+  6. RECRUIT_DATA_ROOT env 隔离：测试不污染 <RECRUIT_WORKSPACE>/data
 """
 from __future__ import annotations
 
