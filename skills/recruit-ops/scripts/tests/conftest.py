@@ -33,10 +33,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 
 import pytest
 
+from lib.recruit_paths import workspace_path
 from tests import helpers as _helpers
 
 
@@ -54,6 +54,39 @@ def _enforce_side_effect_guard():
             "tests 必须在 RECRUIT_DISABLE_SIDE_EFFECTS=1 下运行 (conftest 兜底失败)"
         )
     yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _public_safe_default_attachments():
+    """Create dummy default attachments for tests without committing private docs.
+
+    Public exports intentionally do not track the real onboarding docs or exam
+    archive. Runtime code should still fail-fast when those files are absent in
+    production, but tests need harmless local placeholders to exercise the
+    auto-attachment paths.
+    """
+    root = workspace_path("data")
+    files = [
+        root / "onoffer_data" / "致邃实习协议-2026年4月版.docx",
+        root / "onoffer_data" / "致邃投资-实习生入职信息登记表-2026年版.docx",
+        root / "exam_txt" / "笔试题.tar.gz",
+    ]
+    created = []
+    for path in files:
+        if path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"public-test-placeholder\n")
+        created.append(path)
+
+    try:
+        yield
+    finally:
+        for path in created:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 @pytest.fixture
