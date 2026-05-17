@@ -12,15 +12,26 @@ class TestRound1Result(unittest.TestCase):
         wipe_state()
 
     def test_exam_attachments_prefer_shared_tar(self):
-        from interview import cmd_result as _result_mod
+        """v3.8.4 起 exam 题包探测移到 email_templates.auto_attachments，
+        但"多候选挑第一个能用的"语义保持不变 —— 只有 .tar 存在时仍能命中。"""
+        from email_templates import auto_attachments as aa
         from lib.recruit_paths import exam_archive_dir
 
-        tar_path = str(exam_archive_dir() / "笔试题.tar")
-        with mock.patch("os.path.isfile", side_effect=lambda p: p == tar_path), \
-             mock.patch("os.path.isdir", return_value=False):
-            attachments = _result_mod._get_exam_attachments()
+        tar_path = exam_archive_dir() / "笔试题.tar"
 
-        self.assertEqual(attachments, [tar_path])
+        def _fake_is_file(self):
+            return str(self) == str(tar_path)
+
+        def _fake_stat(self):
+            class S:
+                st_size = 1024
+            return S()
+
+        with mock.patch("pathlib.Path.is_file", _fake_is_file), \
+             mock.patch("pathlib.Path.stat", _fake_stat):
+            attachments = aa.auto_attachments_for("exam_invite")
+
+        self.assertEqual([str(p) for p in attachments], [str(tar_path)])
 
     def test_round1_pass_creates_exam(self):
         tid = new_candidate()
@@ -44,12 +55,49 @@ class TestRound1Result(unittest.TestCase):
 
     def test_round1_reject_delete(self):
         tid = new_candidate()
-        out, _, rc = call_main("interview.cmd_result", [
-            "--talent-id", tid, "--result", "reject_delete",
-            "--round", "1",
-        ])
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_cmd_delete", return_value={
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "json": {"archive_path": "/tmp/archive.json"},
+        }):
+            out, _, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+                "--round", "1",
+            ])
         self.assertEqual(rc, 0)
         self.assertIn("彻底删除", out)
+
+    def test_round1_reject_delete_stops_when_rejection_email_fails(self):
+        tid = new_candidate()
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_send_rejection_email",
+                               return_value={"ok": False, "error": "smtp down"}):
+            _, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+                "--round", "1",
+            ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("未执行删档", err)
+        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
+        self.assertIn(tid, st_out)
+
+    def test_round1_pass_email_failure_does_not_advance_stage(self):
+        tid = new_candidate()
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_send_exam_email", return_value=None):
+            _, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
+                "--round", "1",
+            ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("仍停留", err)
+        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
+        self.assertIn("NEW", st_out)
 
     def test_round1_pass_without_email_fails(self):
         tid = new_candidate()
@@ -66,7 +114,7 @@ class TestRound1Result(unittest.TestCase):
         bogus_inputs = [
             "笔试邀请邮件内容",  # 中文字面量 — 闵思涵案的真实输入
             "exam invite body",  # 英文 placeholder
-            "邮件正文 张三 sample.user@example.com",  # 嵌入合法邮箱但仍非法
+            "邮件正文 张三 embedded@example.com",  # 嵌入合法邮箱但仍非法
             "no-at-sign.example.com",  # 没有 @
             "user@",  # 没有 domain
         ]
@@ -83,10 +131,8 @@ class TestRound1Result(unittest.TestCase):
     def test_round1_wrong_stage_fails(self):
         tid = new_candidate()
         # 走一遍 reject_delete 流程（候选人会被删除）
-        call_main("interview.cmd_result", [
-            "--talent-id", tid, "--result", "reject_delete",
-            "--round", "1",
-        ])
+        from lib import talent_db as _tdb
+        _tdb.delete_talent(tid)
         # 候选人已被删，再执行 pass 应失败
         _, _, rc = call_main("interview.cmd_result", [
             "--talent-id", tid, "--result", "pass", "--email", "x@x.com",

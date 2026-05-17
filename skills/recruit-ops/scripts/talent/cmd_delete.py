@@ -112,12 +112,46 @@ def _build_parser():
                    help="跳过归档（极少场景，比如脏测试数据；正常请保留备份）")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
+
+    # ── v3.8.1 hard guard（事故源 INCIDENT_RULES.md §12 / §13） ────────────
+    # cmd_delete 是物理删档，无法 undo。为防止 agent 把"老板自然语言中的删除
+    # 动词"误识别为已 confirm（事故 2026-05-10 已发生 2 次），强制要求调用方
+    # 显式传一个 --confirm-delete-talent 参数，值必须严格等于 --talent-id。
+    # 这样：
+    #   1. agent propose 时必须把 talent-id 写两次（值不一致 → 直接拒绝）
+    #   2. 老板看到 propose 必须能识别 "为什么这个值出现两次" 才会 confirm
+    #   3. cron / executor 等系统调用方显式传 = 表明知情授权
+    p.add_argument("--confirm-delete-talent",
+                   default=None, metavar="<talent_id>",
+                   help="必填 hard guard：值必须严格等于 --talent-id。设计目的："
+                        "强制 caller 在 propose 命令时把 talent_id 写两遍——"
+                        "防止 LLM 把自然语言里的删除动词误识别为已 confirm。"
+                        "事故源 INCIDENT_RULES.md §12 / §13。")
     return p
 
 
 def _do_delete(args):
     # type: (argparse.Namespace) -> int
     talent_id = args.talent_id
+
+    # ── v3.8.1 hard guard（事故源 INCIDENT_RULES.md §12 / §13） ────────────
+    # --confirm-delete-talent 必须严格等于 --talent-id。任何不匹配 / 缺失 →
+    # UserInputError 直接退出（rc=2，cli_wrapper 不会推飞书告警，stderr 即可）。
+    if not args.confirm_delete_talent:
+        raise UserInputError(
+            "缺失 --confirm-delete-talent。物理删档是不可逆操作,必须把 talent_id 写两遍才能跑。\n"
+            "正确用法：talent.cmd_delete --talent-id {tid} --confirm-delete-talent {tid} ...\n"
+            "事故源 INCIDENT_RULES.md §12 / §13。"
+            .format(tid=talent_id)
+        )
+    if args.confirm_delete_talent != talent_id:
+        raise UserInputError(
+            "--confirm-delete-talent 与 --talent-id 不匹配:\n"
+            "  --talent-id            = {tid}\n"
+            "  --confirm-delete-talent = {confirm}\n"
+            "两者必须严格相等。事故源 INCIDENT_RULES.md §12 / §13。"
+            .format(tid=talent_id, confirm=args.confirm_delete_talent)
+        )
 
     snapshot = talent_db.get_full_talent_snapshot(talent_id)
     if not snapshot:

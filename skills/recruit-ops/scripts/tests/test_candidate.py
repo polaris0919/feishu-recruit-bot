@@ -3,6 +3,8 @@
 import json
 import re
 import unittest
+from unittest import mock
+from pathlib import Path
 
 from tests.helpers import call_main, new_candidate, wipe_state
 from lib.core_state import load_candidate
@@ -50,6 +52,14 @@ class TestNewCandidate(CandidateFlowTestCase):
             "--name", "王芳", "--email", "wf@test.com",
         ])
         self.assertIn("已录入", out)
+        # v3.8.6: 新候选人安排一面先走轻量确认门，只写 proposed，
+        # 不直接提示 agent 发邮件/建日历/改 SCHEDULED。
+        self.assertIn("round1_proposed_time", out)
+        self.assertIn("未收到明确确认前，不发邮件、不建日历", out)
+        self.assertIn("ROUND1_SCHEDULED", out)
+        self.assertIn("round1_confirm_status=CONFIRMED", out)
+        self.assertNotIn("--stage ROUND1_SCHEDULING", out)
+        self.assertNotIn("round1_confirm_status=PENDING", out)
         tid = self.extract_talent_id(out)
         cand = load_candidate(tid)
         self.assertIsNotNone(cand)
@@ -71,7 +81,7 @@ class TestNewCandidate(CandidateFlowTestCase):
             "--name", "李梅", "--email", "lm@x.com",
             "--position", "产品经理",
             "--education", "本科",
-            "--school", "示例大学",
+            "--school", "复旦大学",
             "--work-years", "3",
             "--source", "猎头",
         ])
@@ -79,7 +89,7 @@ class TestNewCandidate(CandidateFlowTestCase):
         cand = load_candidate(tid)
         self.assertEqual(cand["position"], "产品经理")
         self.assertEqual(cand["education"], "本科")
-        self.assertEqual(cand["school"], "示例大学")
+        self.assertEqual(cand["school"], "复旦大学")
         self.assertEqual(cand["work_years"], 3)
         self.assertEqual(cand["source"], "猎头")
 
@@ -138,6 +148,45 @@ class TestNewCandidate(CandidateFlowTestCase):
             else:
                 os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = prev_off
             shutil.rmtree(tmp_root, ignore_errors=True)
+
+    def test_cv_path_is_imported_to_candidate_dir(self):
+        """新候选人的 CV 要归档到稳定目录，避免 DB 指向 Hermes cache 临时文件。"""
+        import os
+        import tempfile
+        import shutil
+        from lib import candidate_storage as _cs
+        tmp_root = tempfile.mkdtemp(prefix="newcand_cv_test_")
+        source_dir = tempfile.mkdtemp(prefix="hermes_cache_docs_")
+        source_cv = Path(source_dir) / "doc_abcdef123456_张三.pdf"
+        source_cv.write_bytes(b"%PDF-1.4 fake cv")
+        prev_root = os.environ.get("RECRUIT_DATA_ROOT")
+        prev_off = os.environ.get("RECRUIT_DISABLE_SIDE_EFFECTS")
+        os.environ["RECRUIT_DATA_ROOT"] = tmp_root
+        os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
+        try:
+            out, _ = self.assert_cli_ok("cmd_new_candidate", [
+                "--name", "张三", "--email", "zhangsan@test.com",
+                "--cv-path", str(source_cv),
+            ])
+            tid = self.extract_talent_id(out)
+            cand = load_candidate(tid)
+            cv_path = Path(cand["cv_path"])
+            self.assertTrue(cv_path.is_file())
+            self.assertEqual(cv_path.parent, _cs.cv_dir(tid))
+            self.assertEqual(cv_path.name, "张三.pdf")
+            self.assertIn(str(cv_path), out)
+            self.assertFalse(source_cv.exists())
+        finally:
+            if prev_root is None:
+                os.environ.pop("RECRUIT_DATA_ROOT", None)
+            else:
+                os.environ["RECRUIT_DATA_ROOT"] = prev_root
+            if prev_off is None:
+                os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
+            else:
+                os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = prev_off
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            shutil.rmtree(source_dir, ignore_errors=True)
 
     def test_warn_continue_when_mkdir_fails(self):
         """mkdir 失败不应阻断录入：候选人照入库，输出含 ⚠ 标记，rc=0。"""
@@ -293,10 +342,22 @@ class TestSearch(CandidateFlowTestCase):
         active_tid = new_candidate("进行中", "active@x.com")
         rejected_tid = new_candidate("已淘汰", "reject@x.com")
         # 一面 reject_keep 已下线；用 reject_delete 直接淘汰
-        self.assert_cli_ok("interview.cmd_result", [
-            "--talent-id", rejected_tid, "--result", "reject_delete",
-            "--round", "1",
-        ])
+        from interview import cmd_result
+        from lib import talent_db as _tdb
+        with mock.patch.object(cmd_result, "_cmd_delete", side_effect=lambda *_args: (
+            _tdb.delete_talent(rejected_tid) and {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "json": {"talent_id": rejected_tid},
+            }
+        )):
+            self.assert_cli_ok("interview.cmd_result", [
+                "--talent-id", rejected_tid, "--result", "reject_delete",
+                "--confirm-reject-delete", rejected_tid,
+                "--round", "1",
+            ])
 
         out, _ = self.assert_cli_ok("cmd_search", ["--all-active"])
         data = json.loads(out)

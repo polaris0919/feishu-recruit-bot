@@ -3,8 +3,8 @@
 放在这里集中维护，防止"地址"/"公司名"硬编码在 6 个 _send_xxx 函数里
 被各自漂移修改。修改公司搬家、改名都只动这一个文件。
 """
-COMPANY = "示例科技公司"
-LOCATION = "公司办公地址（按实际填写）"
+COMPANY = "致邃投资"
+LOCATION = "丁香国际商业中心西塔21楼致邃投资"
 
 
 def round_label(round_num):

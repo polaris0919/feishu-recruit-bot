@@ -1,7 +1,7 @@
 {
   "version": "inbox.general.v35.2026-04-21",
   "purpose": "对任何 stage 的候选人来信做意图归类（不生成回复草稿）",
-  "model_hint": "qwen3-max",
+  "model_hint": "deepseek-v4-pro",
   "temperature": 0.1,
   "max_body_chars": 2500,
   "has_draft": false,

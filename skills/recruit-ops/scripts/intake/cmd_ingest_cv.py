@@ -21,7 +21,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 import zipfile
 import xml.etree.ElementTree as ET
 
-from intake import cmd_parse_cv as _parse_mod
+# A4.1 (v3.8.7): 简历解析逻辑已从 intake/cmd_parse_cv.py 搬到 lib/cv_parser.py;
+# 老 wrapper CLI 整体下线。保留 _parse_mod 别名仅是为了改动最小化, 不再有
+# main(): 这就是个普通 utility 模块。
+from lib import cv_parser as _parse_mod
 from lib.core_state import load_state
 
 _FIELD_LABELS = {

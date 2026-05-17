@@ -11,6 +11,7 @@
 import unittest
 from unittest import mock
 
+from tests import helpers
 from tests.helpers import call_main, new_candidate, wipe_state
 
 
@@ -60,7 +61,8 @@ class TestExamResult(unittest.TestCase):
     def test_exam_pass_defers_boss_calendar_until_confirmed(self):
         tid = _setup_exam()
         from exam import cmd_exam_result
-        with mock.patch.object(cmd_exam_result, "send_round2_notification", return_value=1234) as email_mock:
+        with mock.patch.object(cmd_exam_result, "send_round2_notification",
+                               return_value={"ok": True, "message_id": "m1"}) as email_mock:
             out, err, rc = call_main("cmd_exam_result", [
                 "--talent-id", tid, "--result", "pass",
                 "--round2-time", "2026-04-01 14:00",
@@ -70,6 +72,28 @@ class TestExamResult(unittest.TestCase):
         self.assertIn("候选人确认后", out)
         self.assertIn("线下面试", out)
         email_mock.assert_called_once()
+        cand = helpers.mem_tdb._state["candidates"][tid]
+        self.assertEqual(cand["stage"], "ROUND2_SCHEDULING")
+        self.assertEqual(cand["round2_confirm_status"], "PENDING")
+        self.assertIsNone(cand.get("round2_calendar_event_id"))
+        self.assertEqual(
+            cand["audit"][-1]["action"],
+            "exam_result_pass_round2_scheduling",
+        )
+
+    def test_exam_pass_email_failure_does_not_advance_stage(self):
+        tid = _setup_exam()
+        from exam import cmd_exam_result
+        with mock.patch.object(cmd_exam_result, "send_round2_notification",
+                               return_value={"ok": False, "stderr": "smtp down"}):
+            _, err, rc = call_main("cmd_exam_result", [
+                "--talent-id", tid, "--result", "pass",
+                "--round2-time", "2026-04-01 14:00",
+            ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("仍停留", err)
+        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
+        self.assertIn("EXAM_SENT", st_out)
 
     def test_exam_reject_keep(self):
         tid = _setup_exam()
@@ -83,10 +107,33 @@ class TestExamResult(unittest.TestCase):
 
     def test_exam_reject_delete(self):
         tid = _setup_exam()
-        out, _, rc = call_main("cmd_exam_result", [
-            "--talent-id", tid, "--result", "reject_delete",
-        ])
+        from exam import cmd_exam_result
+        with mock.patch.object(cmd_exam_result, "delete_talent_archive", return_value={
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "json": {"archive_path": "/tmp/archive.json"},
+        }):
+            out, _, rc = call_main("cmd_exam_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+            ])
         self.assertEqual(rc, 0)
+
+    def test_exam_reject_delete_stops_when_rejection_email_fails(self):
+        tid = _setup_exam()
+        from exam import cmd_exam_result
+        with mock.patch.object(cmd_exam_result, "send_rejection_notification",
+                               return_value={"ok": False, "stderr": "smtp down"}):
+            _, err, rc = call_main("cmd_exam_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+            ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("未执行删档", err)
+        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
+        self.assertIn("EXAM_SENT", st_out)
 
     def test_exam_wrong_stage_fails(self):
         tid = new_candidate()  # 还在 NEW，没过一面

@@ -40,16 +40,15 @@ class TestIngestCv(unittest.TestCase):
             zf.writestr("_rels/.rels", rels)
             zf.writestr("word/document.xml", document_xml)
 
-    # 公开仓 fixtures：所有候选人字段全部用中性占位，避免任何真实 PII 入库。
-    _REAL_PDF_TEXT = """候选人C
-邮箱: \tcandidate-c@example.com \t电话: \t+86 \t13800000000
+    _REAL_PDF_TEXT = """候选乙
+邮箱: \tcandidate-c@example.edu \t电话: \t+86 \t13900000001
 求职意向：算法，量化，数据分析
 教育背景
 示例大学 \t2025.09 \t– \t至今
 数学科学学院应用统计硕士
-另一所示例大学 \t2019.09 \t- \t2023.06
+示例大学 \t2019.09 \t- \t2023.06
 数学系信息与计算科学专业学士
-某全国数学竞赛 \tA \t类一等奖
+全国大学生数学竞赛 \tA \t类一等奖
 研究/实习经历
 关于 \tA \t股动量策略的风险平价增强研究
 感知算法实习生
@@ -60,16 +59,16 @@ class TestIngestCv(unittest.TestCase):
 
         docx_path = "/tmp/recruit_test_resume.docx"
         self._make_docx(docx_path, [
-            "候选人K",
-            "candidate-k@example.com",
+            "候选甲",
+            "candidate-b@example.com",
             "示例大学",
             "量化研究实习生",
         ])
 
         with mock.patch.object(cmd_ingest_cv, "_lookup_existing", return_value=None), \
              mock.patch.object(cmd_ingest_cv._parse_mod, "_llm_parse_cv_fields", return_value={
-                 "name": "候选人K",
-                 "email": "candidate-k@example.com",
+                 "name": "候选甲",
+                 "email": "candidate-b@example.com",
                  "education": "博士",
                  "school": "示例大学",
                  "position": "量化研究实习生",
@@ -77,45 +76,44 @@ class TestIngestCv(unittest.TestCase):
              }):
             out, err, rc = call_main("cmd_ingest_cv", [
                 "--file-path", docx_path,
-                "--filename", "候选人K简历.docx",
+                "--filename", "候选甲简历.docx",
             ])
 
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("【新候选人 - 待确认】", out)
-        self.assertIn("候选人K", out)
-        self.assertIn("candidate-k@example.com", out)
+        self.assertIn("候选甲", out)
+        self.assertIn("candidate-b@example.com", out)
         self.assertIn("已读取本地DOCX", err)
 
     def test_ingest_cv_supports_real_pdf_preview(self):
         from intake import cmd_ingest_cv
 
-        # 公开仓不携带任何真实 PDF；除非用户自己放一个 fixture 才会跑该用例。
         pdf_path = os.environ.get(
             "RECRUIT_TEST_PDF_FIXTURE",
-            "<RECRUIT_WORKSPACE>/data/media/inbound/示例候选人简历.pdf",
+            "data/media/inbound/sample-resume-public-fixture.pdf",
         )
         if not os.path.isfile(pdf_path):
             self.skipTest(
                 "公开仓默认无 PDF fixture；如需运行，把脱敏后的简历 PDF 放到 "
-                "`data/media/inbound/示例候选人简历.pdf` 或设 `RECRUIT_TEST_PDF_FIXTURE` 环境变量")
+                "`data/media/inbound/sample-resume-public-fixture.pdf` 或设 `RECRUIT_TEST_PDF_FIXTURE` 环境变量")
 
         def _fake_llm(cv_text, filename="", pdf_title="", pdf_author=""):
-            self.assertIn("候选人C", cv_text)
-            self.assertIn("candidate-c@example.com", cv_text)
-            self.assertIn("某全国数学竞赛", cv_text)
+            self.assertIn("候选乙", cv_text)
+            self.assertIn("candidate-c@example.edu", cv_text)
+            self.assertIn("全国大学生数学竞赛", cv_text)
             self.assertIn("示例大学", cv_text)
             self.assertTrue(filename.endswith(".pdf"))
             return {
-                "name": "候选人C",
-                "email": "candidate-c@example.com",
-                "phone": "13800000000",
+                "name": "候选乙",
+                "email": "candidate-c@example.edu",
+                "phone": "13900000001",
                 "wechat": None,
                 "position": "股票量化研究员",
                 "education": "硕士",
                 "school": "示例大学",
                 "work_years": 0,
                 "source": None,
-                "resume_summary": "示例大学应用统计硕士，具备量化研究与感知算法实习经历，获得某全国数学竞赛A类一等奖。",
+                "resume_summary": "示例大学应用统计硕士，具备量化研究与感知算法实习经历，获得全国大学生数学竞赛A类一等奖。",
             }
 
         with mock.patch.object(cmd_ingest_cv, "_lookup_existing", return_value=None), \
@@ -128,8 +126,8 @@ class TestIngestCv(unittest.TestCase):
 
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("【新候选人 - 待确认】", out)
-        self.assertIn("候选人C", out)
-        self.assertIn("candidate-c@example.com", out)
+        self.assertIn("候选乙", out)
+        self.assertIn("candidate-c@example.edu", out)
         self.assertIn("股票量化研究员", out)
         self.assertIn("示例大学", out)
         self.assertIn("已读取本地PDF", err)

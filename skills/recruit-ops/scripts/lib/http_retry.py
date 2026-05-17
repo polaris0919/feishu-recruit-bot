@@ -7,8 +7,8 @@
 - 指数退避（base * 2^n + jitter），上限 cap 秒。
 - 仅对 transient 异常（urllib URLError / TimeoutError / 自定义可重试异常）重试，
   对业务级 4xx 不重试（caller 自行判断后再 raise）。
-- 副作用禁用环境（RECRUIT_DISABLE_SIDE_EFFECTS=1）下，重试间隔被压成 0，
-  避免测试拖慢。
+- 副作用禁用环境（RECRUIT_DRY_RUN=1 或老的 RECRUIT_DISABLE_SIDE_EFFECTS=1）下，
+  重试间隔被压成 0，避免测试拖慢。
 """
 from __future__ import print_function
 
@@ -21,7 +21,10 @@ from typing import Any, Callable, Optional, Tuple, Type
 
 def _sleep_seconds(attempt, base=1.0, cap=8.0, jitter=0.25):
     # type: (int, float, float, float) -> float
-    if (os.environ.get("RECRUIT_DISABLE_SIDE_EFFECTS") or "").strip().lower() in ("1", "true", "yes", "on"):
+    # A2 (v3.8.7): 走 side_effect_guard.side_effects_disabled() 统一读, 自动 OR
+    # 主开关 RECRUIT_DRY_RUN 和老的 RECRUIT_DISABLE_SIDE_EFFECTS。
+    from lib.side_effect_guard import side_effects_disabled
+    if side_effects_disabled():
         return 0.0
     delay = min(cap, base * (2 ** attempt))
     delay += random.uniform(0, jitter)

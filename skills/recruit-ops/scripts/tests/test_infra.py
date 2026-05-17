@@ -11,14 +11,20 @@ class TestCoreState(unittest.TestCase):
 
     def test_stages_set_is_complete(self):
         from lib import core_state
-        # v3.6: OFFER_HANDOFF / *_DONE_REJECT_DELETE 已下线，见
-        # 20260427_v36_drop_offer_handoff.sql / 20260428_v36_drop_done_reject_delete.sql。
+        # v3.6: OFFER_HANDOFF / *_DONE_REJECT_DELETE 已下线 (v3.6 migrations
+        # 20260427/20260428, v3.8.7 已删档, git log 取)。
+        # v3.8: ONBOARDED 终态新增 (v3.8 migration 20260510, v3.8.7 已删档)。
+        # v3.8.2: OFFER_DECLINED_KEEP 拆桶 (v3.8.2 migration 20260511, v3.8.7 已删档)。
+        # 当前 stages 终态唯一定义于 lib/migrations/schema.sql 的 chk_current_stage CHECK
+        # (B2 contract: tests/test_architecture_contracts.py 保证 Python<->DB 同步)。
         expected = {
             "NEW", "ROUND1_SCHEDULING", "ROUND1_SCHEDULED",
             "EXAM_SENT", "EXAM_REVIEWED", "EXAM_REJECT_KEEP", "WAIT_RETURN",
             "ROUND2_SCHEDULING", "ROUND2_SCHEDULED",
             "ROUND2_DONE_REJECT_KEEP",
+            "OFFER_DECLINED_KEEP",
             "POST_OFFER_FOLLOWUP",
+            "ONBOARDED",
         }
         self.assertEqual(expected, core_state.STAGES)
 
@@ -155,6 +161,92 @@ class TestEmailWatch(unittest.TestCase):
         self.assertEqual(a[4], 1)
 
 
+class TestRoundPrefixWhitelist(unittest.TestCase):
+    """A1 (v3.8.6+): talent_db._round_prefix 把 SQL 拼接前缀收口到白名单。
+
+    本测试守住"理论 SQL 注入面"。任何 caller 把非 1/2 的 round_num 透传
+    进来都必须 fail-fast,而不是悄悄拼成 'round3' 之类的字段名。
+    """
+
+    # helpers._InMemoryTdb 在 sys.modules 把 lib.talent_db 替换掉了, 所以这里
+    # 必须走 helpers.real_talent_db（真模块）才能测到 _round_prefix 本体。
+
+    def test_valid_round_numbers_return_prefix(self):
+        self.assertEqual(real_talent_db._round_prefix(1), "round1")
+        self.assertEqual(real_talent_db._round_prefix(2), "round2")
+
+    def test_invalid_round_numbers_raise_value_error(self):
+        for bad in (0, 3, -1, None, "1", "round1", "1; DROP TABLE talents--"):
+            with self.assertRaises(ValueError):
+                real_talent_db._round_prefix(bad)
+
+    def test_round_time_key_routes_through_whitelist(self):
+        self.assertEqual(real_talent_db._round_time_key(1), "round1_time")
+        self.assertEqual(real_talent_db._round_time_key(2), "round2_time")
+        with self.assertRaises(ValueError):
+            real_talent_db._round_time_key(3)
+
+
+class TestDryRunMasterSwitch(unittest.TestCase):
+    """A2 (v3.8.7): RECRUIT_DRY_RUN 主开关替代 4 个旧 env vars。
+
+    本测试守住"主开关 ON ⇒ 4 闸全关"。如果以后有人在 db_enabled /
+    side_effects_disabled / db_writes_disabled / cli_wrapper 推送闸里
+    单独读旧变量却忘了 OR 主开关, 这里会失败。
+    """
+
+    _MANAGED_KEYS = (
+        "RECRUIT_DRY_RUN",
+        "RECRUIT_DISABLE_SIDE_EFFECTS",
+        "RECRUIT_DISABLE_DB_WRITES",
+        "RECRUIT_DISABLE_DB",
+        "RECRUIT_SUPPRESS_SELF_VERIFY_ALERT",
+    )
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._MANAGED_KEYS}
+        for k in self._MANAGED_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_master_switch_disables_side_effects(self):
+        from lib import side_effect_guard as g
+        self.assertFalse(g.side_effects_disabled())
+        os.environ["RECRUIT_DRY_RUN"] = "1"
+        self.assertTrue(g.side_effects_disabled())
+        self.assertTrue(g.db_writes_disabled())
+        self.assertTrue(g.dry_run_master())
+
+    def test_legacy_env_still_works_independently(self):
+        from lib import side_effect_guard as g
+        os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
+        self.assertTrue(g.side_effects_disabled())
+        self.assertFalse(g.db_writes_disabled())
+        self.assertFalse(g.dry_run_master())
+
+    def test_enable_dry_run_sets_all_compat_vars(self):
+        """enable_dry_run() 必须把所有兼容 env vars 一起设上,
+        否则不走 lib.side_effect_guard 函数的第三方 / 历史代码会漏闸。"""
+        from lib import side_effect_guard as g
+        g.enable_dry_run()
+        self.assertEqual(os.environ.get("RECRUIT_DRY_RUN"), "1")
+        self.assertEqual(os.environ.get("RECRUIT_DISABLE_SIDE_EFFECTS"), "1")
+        self.assertEqual(os.environ.get("RECRUIT_DISABLE_DB_WRITES"), "1")
+        self.assertEqual(os.environ.get("RECRUIT_DISABLE_DB"), "1")
+        self.assertEqual(os.environ.get("RECRUIT_SUPPRESS_SELF_VERIFY_ALERT"), "1")
+
+    def test_master_switch_disables_db_at_config_level(self):
+        from lib import config
+        os.environ["RECRUIT_DRY_RUN"] = "1"
+        self.assertFalse(config.db_enabled())
+
+
 class TestDbFallback(unittest.TestCase):
 
     def setUp(self):
@@ -194,7 +286,7 @@ class TestDbFallback(unittest.TestCase):
         """导入候选人时 DB 已配置，应同步并显示已同步。"""
         out, err, rc = call_main("cmd_import_candidate", [
             "--template",
-            "【导入候选人】\n姓名：候选人K\n邮箱：candidate-k@example.com\n当前阶段：待安排二面"
+            "【导入候选人】\n姓名：候选甲\n邮箱：candidate-b@example.com\n当前阶段：待安排二面"
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("已同步", out)

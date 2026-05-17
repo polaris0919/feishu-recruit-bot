@@ -34,14 +34,23 @@ from typing import Optional
 from lib.cli_wrapper import run_with_self_verify, UserInputError
 
 
-_EVENT_ID_RE = re.compile(r"event_id\s*=\s*([\w\-:]+)", re.IGNORECASE)
+# v3.8.6: lib.feishu.create_interview_event 的人话返回历史上有两种格式：
+#   - "ok event_id=evt_abc"
+#   - "事件ID: 9538..._0" / "事件ID：9538..._0"
+# cmd_calendar_create 的 JSON `event_id` 是上游 chain 回填 DB 的唯一可靠来源，
+# 必须由 CLI 自己解析，不能让 agent 从中文 message 里猜。
+_EVENT_ID_RE = re.compile(
+    r"(?:event_id|事件ID)\s*(?:=|:|：)\s*([A-Za-z0-9_\-:]+)",
+    re.IGNORECASE,
+)
 
 
 def _extract_event_id(message):
     # type: (Optional[str]) -> Optional[str]
     """从 lib.feishu.create_interview_event 返回的人话 message 里抠出 event_id。
 
-    create_interview_event 的实际返回字符串里（成功时）通常包含 'event_id=xxx'。
+    create_interview_event 的实际返回字符串里（成功时）通常包含
+    'event_id=xxx' 或中文 '事件ID: xxx'。
     若抠不到就返回 None；caller 可降级处理。"""
     if not message:
         return None
@@ -71,10 +80,37 @@ def _build_parser():
                         "典型用途：§5.11 把面试官加进日历。")
     p.add_argument("--duration-minutes", type=int, default=None,
                    help="事件时长（分钟）。默认 60；§5.11 一面用 30。")
+    p.add_argument("--attach-cv", dest="attach_cv", action="store_true", default=True,
+                   help="创建日程时自动把候选人 cv_path 指向的简历作为日程附件（默认开启）")
+    p.add_argument("--no-attach-cv", dest="attach_cv", action="store_false",
+                   help="不为本次日程挂载候选人 CV 附件")
     p.add_argument("--dry-run", action="store_true",
                    help="不真调飞书；输出会带 dry_run=True 标记")
     p.add_argument("--json", action="store_true", help="结果以 JSON 输出")
     return p
+
+
+def _load_talent_defaults(talent_id):
+    try:
+        from lib import talent_db as _tdb
+        cand = _tdb.get_one(talent_id) if _tdb._is_enabled() else None
+    except Exception:
+        cand = None
+    return cand or {}
+
+
+def _route_round1_interviewers(talent_id):
+    from intake import cmd_route_interviewer
+    payload = cmd_route_interviewer._build_payload(talent_id)
+    if payload.get("ambiguous"):
+        raise UserInputError(
+            "一面派单不明确，拒绝创建只有老板的日历：{}".format(
+                payload.get("ambiguous_reason") or "ambiguous"))
+    if payload.get("config_error"):
+        raise UserInputError(
+            "一面派单配置错误，拒绝创建只有老板的日历：{}".format(
+                payload.get("config_error_detail") or "config_error"))
+    return payload
 
 
 def _emit(args, payload):
@@ -95,9 +131,22 @@ def main(argv=None):
     if not interview_time:
         raise UserInputError("--time（或别名 --round2-time）必填")
 
+    talent_defaults = _load_talent_defaults(args.talent_id)
+    candidate_name = (args.candidate_name or "").strip() or (
+        talent_defaults.get("candidate_name") or "").strip()
+    candidate_email = (args.candidate_email or "").strip() or (
+        talent_defaults.get("candidate_email") or "").strip()
+
     extra_attendees = [
         oid.strip() for oid in (args.extra_attendee or []) if oid and oid.strip()
     ]
+    route_payload = None
+    if args.round_num == 1 and not extra_attendees:
+        route_payload = _route_round1_interviewers(args.talent_id)
+        extra_attendees = [
+            oid.strip() for oid in (route_payload.get("interviewer_open_ids") or [])
+            if oid and oid.strip()
+        ]
 
     if args.dry_run:
         _emit(args, {
@@ -105,7 +154,11 @@ def main(argv=None):
             "talent_id": args.talent_id, "round": args.round_num,
             "time": interview_time, "event_id": None,
             "extra_attendees": extra_attendees,
+            "candidate_name": candidate_name,
+            "candidate_email": candidate_email,
+            "route": route_payload,
             "duration_minutes": args.duration_minutes,
+            "attach_cv": bool(args.attach_cv),
             "message": "[DRY-RUN] 未真实创建日历事件",
         })
         return 0
@@ -116,11 +169,12 @@ def main(argv=None):
             talent_id=args.talent_id,
             interview_time=interview_time,
             round_num=args.round_num,
-            candidate_email=args.candidate_email,
-            candidate_name=args.candidate_name,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
             old_event_id=args.old_event_id,
             extra_attendee_open_ids=extra_attendees,
             duration_minutes=args.duration_minutes,
+            attach_cv=bool(args.attach_cv),
         )
     except Exception as e:
         _emit(args, {
@@ -134,7 +188,11 @@ def main(argv=None):
         "ok": True, "talent_id": args.talent_id, "round": args.round_num,
         "time": interview_time, "event_id": event_id, "message": message,
         "extra_attendees": extra_attendees,
+        "candidate_name": candidate_name,
+        "candidate_email": candidate_email,
+        "route": route_payload,
         "duration_minutes": args.duration_minutes,
+        "attach_cv": bool(args.attach_cv),
     }
     _emit(args, payload)
     return 0

@@ -2,12 +2,12 @@
 
 > 适用场景：在当前本地真库、当前 Feishu 配置和两个固定测试邮箱下，验证候选人协商流程的真实行为，而不是只验证单个命令能否跑通。
 >
-> 执行约定：除非特别说明，下文所有 Python 命令都默认在仓库根目录 `<RECRUIT_WORKSPACE>/skills/recruit-ops` 执行，并使用 `uv run python3 -m <module>` 作为前缀。
+> 执行约定：除非特别说明，下文所有 Python 命令都默认在仓库根目录 `/home/admin/recruit-workspace/skills/recruit-ops` 执行，并使用 `uv run python3 -m <module>` 作为前缀。
 >
 > 固定测试邮箱：
 >
-> - `fake-test@example.com`
-> - `candidate-k@example.com`
+> - `candidate-a@example.com`
+> - `candidate-b@example.com`
 
 ---
 
@@ -107,14 +107,14 @@ python3 -m feishu.cmd_calendar_create --talent-id <talent_id> --round 1
 ### 1. 人类可读状态
 
 ```bash
-cd <RECRUIT_WORKSPACE>/skills/recruit-ops/scripts
+cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
 python3 common/cmd_status.py --talent-id <talent_id> --audit-lines 30
 ```
 
 ### 2. 完整 DB 视图
 
 ```bash
-cd <RECRUIT_WORKSPACE>/skills/recruit-ops/scripts
+cd /home/admin/recruit-workspace/skills/recruit-ops/scripts
 python3 common/cmd_debug_candidate.py --talent-id <talent_id> --event-limit 30
 ```
 
@@ -210,15 +210,15 @@ WHERE talent_id = '<talent_id>';
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `fake-test@example.com` |
-| 当前场景干扰候选人 | `candidate-k@example.com` |
+| 当前场景目标候选人 | `candidate-a@example.com` |
+| 当前场景干扰候选人 | `candidate-b@example.com` |
 
 下一组交换角色：
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `candidate-k@example.com` |
-| 当前场景干扰候选人 | `fake-test@example.com` |
+| 当前场景目标候选人 | `candidate-b@example.com` |
+| 当前场景干扰候选人 | `candidate-a@example.com` |
 
 这样就能在只有两个真实邮箱的情况下，仍然模拟：
 
@@ -247,16 +247,16 @@ WHERE talent_id = '<talent_id>';
 ### 预设
 
 - 候选人 A：`E2E_R1_NEGOTIATION_A`
-- 邮箱：`fake-test@example.com`
+- 邮箱：`candidate-a@example.com`
 - 干扰候选人 B：`E2E_R1_NEGOTIATION_B`
-- 邮箱：`candidate-k@example.com`
+- 邮箱：`candidate-b@example.com`
 
 ### 执行骨架
 
 #### 0. 创建候选人并安排一面
 
 ```bash
-python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "fake-test@example.com" --position "量化研究实习生"
+python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "candidate-a@example.com" --position "量化研究实习生"
 python3 round1/cmd_round1_schedule.py --talent-id <talent_id_a> --time "2026-05-10 14:00"
 ```
 
@@ -646,6 +646,6 @@ python3 exam/daily_exam_review.py --reschedule-scan-only
 
 如果你只是想快速验证命令本身是否能跑，继续看：
 
-- `<RECRUIT_WORKSPACE>/skills/recruit-ops/docs/CLI_REFERENCE.md`
+- `/home/admin/recruit-workspace/skills/recruit-ops/docs/CLI_REFERENCE.md`
 
 如果你要验证真实的“多轮协商 + 干扰邮件 + pending 语义 + 改期 / 暂缓 / 线上 / 笔试混合邮箱”，优先使用本文件。

@@ -356,5 +356,127 @@ class TestCmdSendUseCachedDraft(unittest.TestCase):
         self.assertIn("draft", err)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# v3.8.6: outbound/cmd_send 模板模式公司常量保护
+# ════════════════════════════════════════════════════════════════════════════
+#
+# 触发动机：v3.8.5 末尾 agent 在飞书侧调命令时凭空编了
+#   --vars company="量化投资公司" location="上海"
+# 而真值在 email_templates/constants.py 是 "致邃投资" / "丁香国际...21楼"。
+# v3.8.6 把 company / location 改成 fail-loud 拒绝 CLI 覆盖, 这组测试
+# 锁住该约束, 任何一边漂移都让 CI 红。
+
+class TestCmdSendCompanyLocationLocked(unittest.TestCase):
+
+    def setUp(self):
+        helpers.wipe_state()
+
+    def _mk_invite_talent(self, tid="t_invlock"):
+        helpers.mem_tdb._state.setdefault("candidates", {})[tid] = {
+            "talent_id": tid,
+            "candidate_name": "测试候选人",
+            "candidate_email": "test@example.com",
+            "current_stage": "ROUND1_SCHEDULING",
+            "stage": "ROUND1_SCHEDULING",
+        }
+        return tid
+
+    def test_default_company_location_when_not_provided(self):
+        """不传 company / location → 走 constants.COMPANY / LOCATION。"""
+        from email_templates.constants import COMPANY, LOCATION
+        tid = self._mk_invite_talent()
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 14:00",
+            "position=量化研究员",
+            "position_suffix=（量化研究员）",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        outbound_rows = [r for r in helpers.mem_tdb._emails.values()
+                         if r["direction"] == "outbound"]
+        self.assertEqual(len(outbound_rows), 1)
+        body = outbound_rows[0]["body_full"]
+        self.assertIn(COMPANY, body)
+        self.assertIn(LOCATION, body)
+
+    def test_reject_when_company_overridden(self):
+        """传 --vars company=别的 → fail-loud 拒绝, 不发邮件。"""
+        tid = self._mk_invite_talent()
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 14:00",
+            "company=量化投资公司",
+        ])
+        self.assertNotEqual(rc, 0, "应拒绝, stderr=" + err + ", stdout=" + out)
+        self.assertIn("company", err)
+        outbound_rows = [r for r in helpers.mem_tdb._emails.values()
+                         if r["direction"] == "outbound"]
+        self.assertEqual(len(outbound_rows), 0, "拒绝后不应有出站邮件落库")
+
+    def test_reject_when_location_overridden(self):
+        """传 --vars location=别的 → fail-loud 拒绝, 不发邮件。"""
+        tid = self._mk_invite_talent()
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 14:00",
+            "location=上海",
+        ])
+        self.assertNotEqual(rc, 0, "应拒绝, stderr=" + err + ", stdout=" + out)
+        self.assertIn("location", err)
+        outbound_rows = [r for r in helpers.mem_tdb._emails.values()
+                         if r["direction"] == "outbound"]
+        self.assertEqual(len(outbound_rows), 0)
+
+    def test_allow_when_company_matches_constant(self):
+        """传 --vars company=<真值> 与 constants 相等 → 不拒, 透传。
+        防呆：上游 chain 显式重传相同值不应误伤。"""
+        from email_templates.constants import COMPANY
+        tid = self._mk_invite_talent()
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 14:00",
+            "company={}".format(COMPANY),
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+
+    def test_round1_invite_rejects_time_mismatching_proposed_time(self):
+        """v3.8.6：确认门防止确认 A、发送 B。"""
+        tid = self._mk_invite_talent()
+        helpers.mem_tdb._state["candidates"][tid]["round1_proposed_time"] = (
+            "2026-05-20 14:00")
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 15:00",
+        ])
+        self.assertNotEqual(rc, 0, "stdout={}".format(out))
+        self.assertIn("待确认时间不一致", err)
+
+    def test_round1_invite_allows_time_matching_proposed_time(self):
+        tid = self._mk_invite_talent()
+        helpers.mem_tdb._state["candidates"][tid]["round1_proposed_time"] = (
+            "2026-05-20 14:00:00+08:00")
+        out, err, rc = helpers.call_main("outbound.cmd_send", [
+            "--talent-id", tid,
+            "--template", "round1_invite",
+            "--vars",
+            "round1_time=2026-05-20 14:00",
+            "--dry-run",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr={}".format(err))
+
+
 if __name__ == "__main__":
     unittest.main()

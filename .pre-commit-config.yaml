@@ -1,0 +1,45 @@
+# v3.8.5：本地提交前自检, 避免再出现"测试红还 commit、SKILL.md 没入库" 这类
+# 仓库卫生问题。
+#
+# 接入：
+#   1) pip install pre-commit  (或 brew / pipx)
+#   2) cd <workspace_root> && pre-commit install
+#   3) 以后每次 `git commit` 都会先跑 hook，不绿不让提
+#
+# 主动跑一遍（不依赖 git event）：
+#   pre-commit run --all-files
+
+repos:
+  # 基础卫生：尾空白、文件末尾换行、私密文件不入库
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: detect-private-key
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+
+  # 本仓库本地 hook：跑 pytest（用 uv 跑，与 CI 一致）
+  - repo: local
+    hooks:
+      - id: recruit-ops-pytest
+        name: recruit-ops pytest (skills/recruit-ops/scripts/tests)
+        entry: bash -c 'cd skills/recruit-ops && PYTHONPATH=scripts RECRUIT_DISABLE_DB=1 RECRUIT_DISABLE_SIDE_EFFECTS=1 RECRUIT_DISABLE_DB_WRITES=1 RECRUIT_SUPPRESS_SELF_VERIFY_ALERT=1 uv run --group dev python3 -m pytest scripts/tests/ -q --tb=short'
+        language: system
+        # 仅当 scripts/ 或 pyproject 改动时触发, 避免改 README 也强跑 8s 测试
+        files: '^skills/recruit-ops/(scripts/|pyproject\.toml$|uv\.lock$)'
+        pass_filenames: false
+
+      - id: forbid-config-secrets
+        # 进一步防御：万一 .gitignore 失效, 真实 config/*.json 不能入库
+        # （example 后缀的允许）。
+        name: forbid committing real config/*.json
+        entry: bash -c 'for f in "$@"; do case "$f" in config/*.example.json) ;; config/*.json) echo "❌ 真实配置文件不能提交: $f (见 .gitignore)"; exit 1;; esac; done'
+        language: system
+        files: '^config/.*\.json$'
+        pass_filenames: true

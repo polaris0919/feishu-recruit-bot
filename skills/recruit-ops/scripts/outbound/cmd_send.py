@@ -157,6 +157,8 @@ def _maybe_normalize_body_inplace(body, label, enabled):
 # v3.5.11 (2026-04-22)：注释加上 rejection——它是 auto_reject.cmd_scan_exam_timeout
 # 显式传入的 context；本表里没有 stage 默认映射到 rejection 的，是合理的（拒信只
 # 由 auto_reject 路径主动发起）。
+# v3.8.2 (2026-05-11)：新增 OFFER_DECLINED_KEEP → followup（沿用 POST_OFFER_FOLLOWUP
+# 的 context；这一类候选人最后一次有意义的邮件交互发生在 offer 沟通阶段）。
 _STAGE_TO_CONTEXT = {
     "NEW": "intake",
     "ROUND1_SCHEDULING": "round1",
@@ -168,6 +170,7 @@ _STAGE_TO_CONTEXT = {
     "ROUND2_SCHEDULING": "round2",
     "ROUND2_SCHEDULED": "round2",
     "ROUND2_DONE_REJECT_KEEP": "round2",
+    "OFFER_DECLINED_KEEP": "followup",
     "POST_OFFER_FOLLOWUP": "followup",
 }
 
@@ -284,11 +287,39 @@ def _resolve_recipient(talent_id):
     return email, name, stage
 
 
+def _resolve_talent_snapshot(talent_id, required=True):
+    # type: (str) -> dict
+    """取候选人快照；兼容测试里 mock _resolve_recipient 的旧三元组接口。"""
+    snap = talent_db.get_one(talent_id)
+    if not snap and required:
+        raise UserInputError("候选人 {} 不存在".format(talent_id))
+    return snap or {}
+
+
+def _same_minute(a, b):
+    # type: (object, object) -> bool
+    """面试时间只比较到分钟，兼容 DB timestamp / CLI 字符串。"""
+    if a is None or b is None:
+        return a is b
+    return str(a).strip()[:16] == str(b).strip()[:16]
+
+
 def _do_send(args):
     # type: (argparse.Namespace) -> int
     talent_id = args.talent_id
 
+    # --override-subject 仅 --use-cached-draft 模式下覆盖 'Re: 原 subject'。
+    # 模板模式下无 'Re:' 概念，模板自己有 subject；自由文本模式直接用 --subject。
+    # 旧版会静默丢弃用户传的 --override-subject，为防误用一律早报错。
+    if args.override_subject and not args.use_cached_draft:
+        raise UserInputError(
+            "--override-subject 只在 --use-cached-draft 模式下生效。"
+            "模板模式请改 --vars 或 --template 自带的 subject；"
+            "自由文本模式直接用 --subject。"
+        )
+
     to_email, candidate_name, stage = _resolve_recipient(talent_id)
+    talent_snap = _resolve_talent_snapshot(talent_id, required=False)
     context = args.context or _infer_context(stage)
 
     # ── 渲染 / 取正文 ────────────────────────────────────────────────────
@@ -299,14 +330,45 @@ def _do_send(args):
     if args.template:
         try:
             from email_templates import renderer
-            from email_templates.constants import COMPANY
+            from email_templates.constants import COMPANY, LOCATION
         except Exception as e:
             raise RuntimeError("加载 email_templates 失败: {}".format(e))
         try:
             template_vars = _parse_kv_pairs(args.vars)
+            # v3.8.6: company / location 是 email_templates.constants 里的
+            # 公司常量（"致邃投资" / "丁香国际...21楼"）, 亘古不变, 不允许
+            # CLI 调用方覆盖。否则 agent 在飞书侧"安排一面"时会凭空编公司名
+            # （如"量化投资公司"）和简化地址（如"上海"）, 发出去的邀请邮件
+            # 抬头/地址都对不上事实。fail-loud：传了就拒, 让 cli_wrapper
+            # 推飞书 critical, 而不是静默接受。
+            for fixed_key, fixed_val in (("company", COMPANY), ("location", LOCATION)):
+                if fixed_key in template_vars and template_vars[fixed_key] != fixed_val:
+                    raise UserInputError(
+                        "--vars {k}={got!r} 被拒：{k} 是公司常量（见 "
+                        "email_templates/constants.py {K}={want!r}）, 不允许覆盖。"
+                        "去掉命令里的 {k}=... 即可走默认值。".format(
+                            k=fixed_key, K=fixed_key.upper(),
+                            got=template_vars[fixed_key], want=fixed_val))
+                template_vars[fixed_key] = fixed_val
             template_vars.setdefault("candidate_name", candidate_name)
-            template_vars.setdefault("company", COMPANY)
             template_vars.setdefault("talent_id", talent_id)
+            # v3.8.6: position / position_suffix 默认为空, 让"未指定具体岗位"
+            # 时模板能渲染（"一面邀请" 而不是 "一面邀请（量化研究员）"）, 避免 agent
+            # 在不知道岗位时编一个出来。如果 caller 显式要带岗位, 必须**同时**
+            # 传 position + position_suffix（两个都是 model fact, 由 agent 从
+            # 对话里抓, 不该凭空生成）。
+            template_vars.setdefault("position", "")
+            template_vars.setdefault("position_suffix", "")
+            if args.template == "round1_invite":
+                proposed = talent_snap.get("round1_proposed_time")
+                requested = template_vars.get("round1_time")
+                if proposed and requested and not _same_minute(proposed, requested):
+                    raise UserInputError(
+                        "round1_invite 时间与待确认时间不一致："
+                        "round1_proposed_time={!r}, round1_time={!r}。"
+                        "请先让 HR/老板确认正确时间，或用 talent.cmd_update "
+                        "--set round1_proposed_time=<正确时间> 修正 proposed。".format(
+                            proposed, requested))
             subject, body = renderer.render(args.template, **template_vars)
         except KeyError as e:
             raise UserInputError(

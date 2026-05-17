@@ -1,6 +1,11 @@
 {
+  "_comment": "IMAP 配置：用于 inbox.cmd_scan 拉候选人入站邮件、笔试答案。复制到 recruit-email-config.json 后填真实值。",
+  "_required": ["RECRUIT_EXAM_IMAP_HOST", "RECRUIT_EXAM_IMAP_USER", "RECRUIT_EXAM_IMAP_PASS"],
+  "_env_overrides": "同名 env var 优先级最高。",
+  "_note_port": "标准 IMAPS = 993；不写则按 SDK 默认。",
+
   "RECRUIT_EXAM_IMAP_HOST": "imap.example.com",
   "RECRUIT_EXAM_IMAP_PORT": "993",
   "RECRUIT_EXAM_IMAP_USER": "recruit@example.com",
-  "RECRUIT_EXAM_IMAP_PASS": "your_password"
+  "RECRUIT_EXAM_IMAP_PASS": "REPLACE_ME"
 }

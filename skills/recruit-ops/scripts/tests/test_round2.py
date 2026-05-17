@@ -6,15 +6,16 @@
     wrapper 已删除，端到端剧本（schedule → confirm / reschedule / defer）改由
     tests/test_agent_chain.py 用 lib.run_chain 串 atomic CLI 验证。
   - TestRound2Result 保留：interview.cmd_result --round 2 仍是 atomic CLI。
-    setUp 直接用 talent.cmd_update 推到 ROUND2_SCHEDULED，不走已删的 cmd_confirm。
+    setUp 用合法 §4.2 闭环字段推到 ROUND2_SCHEDULED，不走已删的 cmd_confirm。
 """
 import unittest
+from unittest import mock
 
 from tests.helpers import call_main, new_candidate, wipe_state
 
 
 def _setup_r2_scheduled():
-    """候选人走完一面 + 笔试，并直接置为 ROUND2_SCHEDULED（替代旧 cmd_confirm 路径）。"""
+    """候选人走完一面 + 笔试，并按 §4.2 闭环置为 ROUND2_SCHEDULED。"""
     tid = new_candidate()
     call_main("interview.cmd_result", [
         "--talent-id", tid, "--result", "pass", "--email", "x@x.com",
@@ -27,8 +28,9 @@ def _setup_r2_scheduled():
     out, err, rc = call_main("talent.cmd_update", [
         "--talent-id", tid,
         "--stage", "ROUND2_SCHEDULED",
+        "--set", "round2_time=2026-04-01 14:00",
         "--set", "round2_confirm_status=CONFIRMED",
-        "--force",
+        "--set", "round2_calendar_event_id=evt_round2_test",
     ])
     if rc != 0:
         raise AssertionError("talent.cmd_update 应成功 out={} err={}".format(out, err))
@@ -52,14 +54,44 @@ class TestRound2Result(unittest.TestCase):
 
     def test_round2_pass(self):
         tid = _setup_r2_scheduled()
-        out, err, rc = call_main("interview.cmd_result", [
-            "--talent-id", tid, "--result", "pass",
-            "--round", "2",
-        ])
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_notify_boss_offer_prompt", return_value=True) as notify:
+            out, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "pass",
+                "--round", "2",
+            ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        notify.assert_called_once()
         # v3.6: OFFER_HANDOFF 已下线；round2 pass 一步推到 POST_OFFER_FOLLOWUP。
+        # v3.9: 不再立即通知 HR，而是等待老板确认入职前邮件。
         self.assertIn("POST_OFFER_FOLLOWUP", out)
+        self.assertIn("等待老板确认入职前邮件", out)
         self.assertNotIn("OFFER_HANDOFF", out)
+
+    def test_round2_pass_legacy_hr_notify_not_called(self):
+        tid = _setup_r2_scheduled()
+        from interview import cmd_result
+        self.assertFalse(hasattr(cmd_result, "_notify_hr_offer"))
+        with mock.patch.object(cmd_result, "_notify_boss_offer_prompt", return_value=True):
+            _, _, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "pass",
+                "--round", "2",
+            ])
+        self.assertEqual(rc, 0)
+
+    def test_round2_pass_boss_prompt_failure_does_not_rollback_state(self):
+        tid = _setup_r2_scheduled()
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_notify_boss_offer_prompt", return_value=False):
+            out, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "pass",
+                "--round", "2",
+            ])
+        self.assertEqual(rc, 0, "{}|{}".format(out, err))
+        self.assertIn("Boss Feishu", err)
+        self.assertIn("不回滚", err)
+        st_out, _, _ = call_main("cmd_status", ["--talent-id", tid])
+        self.assertIn("POST_OFFER_FOLLOWUP", st_out)
 
     def test_round2_reject_keep(self):
         tid = _setup_r2_scheduled()
@@ -72,12 +104,40 @@ class TestRound2Result(unittest.TestCase):
 
     def test_round2_reject_delete(self):
         tid = _setup_r2_scheduled()
-        out, _, rc = call_main("interview.cmd_result", [
-            "--talent-id", tid, "--result", "reject_delete",
-            "--round", "2",
-        ])
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_cmd_delete", return_value={
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "json": {"archive_path": "/tmp/archive.json"},
+        }):
+            out, _, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+                "--round", "2",
+            ])
         self.assertEqual(rc, 0)
         self.assertIn("彻底删除", out)
+
+    def test_round2_reject_delete_stops_when_delete_fails(self):
+        tid = _setup_r2_scheduled()
+        from interview import cmd_result
+        with mock.patch.object(cmd_result, "_cmd_delete", return_value={
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "archive failed",
+            "json": None,
+        }):
+            out, err, rc = call_main("interview.cmd_result", [
+                "--talent-id", tid, "--result", "reject_delete",
+                "--confirm-reject-delete", tid,
+                "--round", "2",
+            ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("删档失败", err)
+        self.assertNotIn("彻底删除", out)
 
     def test_round2_wrong_stage_fails(self):
         tid = new_candidate()  # 还在 NEW

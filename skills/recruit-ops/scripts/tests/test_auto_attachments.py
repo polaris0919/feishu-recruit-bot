@@ -26,9 +26,10 @@ from pathlib import Path
 from unittest import mock
 
 from email_templates import auto_attachments as aa
+from lib.recruit_paths import workspace_path
 
 
-REAL_DATA_ROOT = "<RECRUIT_WORKSPACE>/data"
+REAL_DATA_ROOT = workspace_path("data")
 
 
 class TestAutoAttachmentsRegistry(unittest.TestCase):
@@ -46,8 +47,8 @@ class TestAutoAttachmentsRegistry(unittest.TestCase):
         """v3.5.10 上线必备：合同 + 登记表 docx 真的躺在 data/onoffer_data/。
         任何人删 / 改名这两个文件都会让该测试红，强制走 PR review。"""
         for rel in [
-            "onoffer_data/模板-示例科技实习协议-2026年4月版.docx",
-            "onoffer_data/示例科技-实习生入职信息登记表-2026年版.docx",
+            "onoffer_data/致邃实习协议-2026年4月版.docx",
+            "onoffer_data/致邃投资-实习生入职信息登记表-2026年版.docx",
         ]:
             p = Path(REAL_DATA_ROOT) / rel
             self.assertTrue(p.is_file(), "缺失默认附件: {}".format(p))
@@ -106,12 +107,13 @@ class TestCmdSendAutoAttach(unittest.TestCase):
                 rc = 2
         return rc, out.getvalue(), err.getvalue()
 
+    # v3.8.6: location 是公司常量, 不在 --vars 里传（cmd_send fail-loud 拒覆盖）。
+    # 走 email_templates.constants.LOCATION 默认。
     _BASE_OFFER_VARS = [
         "position_title=量化研究员",
         "interview_feedback=表现不错",
         "daily_rate=350",
         "onboard_date=2026-05-06",
-        "location=上海·南京西路",
         "evaluation_criteria=试用期 1 个月",
     ]
 
@@ -126,8 +128,8 @@ class TestCmdSendAutoAttach(unittest.TestCase):
         self.assertEqual(rc, 0, "stderr={}".format(err))
         result = json.loads(out.strip().splitlines()[-1])
         names = [a["name"] for a in result["attachments"]]
-        self.assertIn("模板-示例科技实习协议-2026年4月版.docx", names)
-        self.assertIn("示例科技-实习生入职信息登记表-2026年版.docx", names)
+        self.assertIn("致邃实习协议-2026年4月版.docx", names)
+        self.assertIn("致邃投资-实习生入职信息登记表-2026年版.docx", names)
         # 两个都应该是 auto=True
         for a in result["attachments"]:
             self.assertTrue(a.get("auto"),
@@ -142,7 +144,6 @@ class TestCmdSendAutoAttach(unittest.TestCase):
             "round1_time=2026-05-06 14:00",
             "position=量化研究员",
             "position_suffix=（实习）",
-            "location=上海·南京西路",
             "--dry-run",
             "--json",
         ])
@@ -153,7 +154,7 @@ class TestCmdSendAutoAttach(unittest.TestCase):
     def test_manual_attach_dedup(self):
         """agent 手动 --attach 了同一份合同 → 不会重复追加。"""
         agreement = (Path(REAL_DATA_ROOT) /
-                     "onoffer_data/模板-示例科技实习协议-2026年4月版.docx")
+                     "onoffer_data/致邃实习协议-2026年4月版.docx")
         rc, out, err = self._run([
             "--talent-id", "t_offer_test",
             "--template", "onboarding_offer",
@@ -166,17 +167,17 @@ class TestCmdSendAutoAttach(unittest.TestCase):
         result = json.loads(out.strip().splitlines()[-1])
         names = [a["name"] for a in result["attachments"]]
         # 只能出现一次
-        self.assertEqual(names.count("模板-示例科技实习协议-2026年4月版.docx"), 1)
+        self.assertEqual(names.count("致邃实习协议-2026年4月版.docx"), 1)
         # 登记表仍应被自动追加
-        self.assertIn("示例科技-实习生入职信息登记表-2026年版.docx", names)
+        self.assertIn("致邃投资-实习生入职信息登记表-2026年版.docx", names)
         # 手动那份 auto=False，自动那份 auto=True
         agreement_meta = next(
             a for a in result["attachments"]
-            if a["name"] == "模板-示例科技实习协议-2026年4月版.docx"
+            if a["name"] == "致邃实习协议-2026年4月版.docx"
         )
         form_meta = next(
             a for a in result["attachments"]
-            if a["name"] == "示例科技-实习生入职信息登记表-2026年版.docx"
+            if a["name"] == "致邃投资-实习生入职信息登记表-2026年版.docx"
         )
         self.assertFalse(agreement_meta.get("auto"))
         self.assertTrue(form_meta.get("auto"))

@@ -39,7 +39,7 @@ exam/fetch_exam_submission._download_message + 通用化）。
   from lib import email_attachments
   meta = email_attachments.extract_and_save(
       msg, talent_id="t_abc123", email_id="ec...uuid")
-  # meta == [{"name": "候选人F_简历.pdf", "size": 235123, ...}]
+  # meta == [{"name": "李志鹏_简历.pdf", "size": 235123, ...}]
 """
 from __future__ import print_function
 
