@@ -1,6 +1,6 @@
 # 飞书招聘管家 — recruit-ops
 
-> **版本**：v3.5（2026-04-21）  
+> **版本**：当前运行态（v3.8.x，2026-05）
 > **运行环境**：Hermes Gateway · Python 3.10+ · PostgreSQL 状态真源 · 飞书 WebSocket  
 > **代码位置**：`/home/admin/recruit-workspace/skills/recruit-ops/`
 
@@ -40,8 +40,9 @@
 | **全流程自动化** | 从 HR 录入候选人，到一面邀请、笔试、二面、结果归档，全程自动流转 |
 | **双角色设计** | HR 使用飞书消息模板；老板用自然语言（`recruit-ops` Skill）与 OC 对话；同一个 skill 同时服务两侧 |
 | **邮件协商** | OC 自动向候选人发送面试邀请邮件，LLM 解析候选人回复意图（确认/改期/不明） |
-| **飞书日历** | 仅在候选人最终确认面试时间后，才在老板飞书日历创建日程，老板收到邀请通知 |
-| **超时自动确认** | 候选人 48 小时未回复邮件，系统默认确认，自动创建日历 |
+| **飞书日历** | 候选人确认后先推飞书给老板；老板明确授权后才创建日历并推进到已确认阶段 |
+| **二面确认护栏** | 二面必须先进入 `ROUND2_SCHEDULING`，候选人确认后再由老板授权建日历；禁止从笔试 / 一面 / WAIT_RETURN 等阶段直达 `ROUND2_SCHEDULED` |
+| **超时确认提醒** | 候选人 48 小时未回复邮件，系统转入 `boss_confirm_pending` 并提醒老板手动决定，不自动建日历 |
 | **状态持久化** | PostgreSQL 为唯一数据源；自动化测试通过内存 fake `talent_db` 注入隔离 |
 | **批量导入** | 支持导入已有候选人并指定当前阶段，适合系统上线初期迁移历史数据 |
 
@@ -85,6 +86,7 @@ NEW → ROUND1_SCHEDULING → ROUND1_SCHEDULED → EXAM_SENT → EXAM_REVIEWED
 > - **v3.6（4 月 27/28 日）**：删除 `OFFER_HANDOFF`（瞬时态，合并入 `POST_OFFER_FOLLOWUP`），删除 `ROUND1_DONE_REJECT_DELETE` / `ROUND2_DONE_REJECT_DELETE`（`reject_delete` 直接物理删除，不经停 stage）。状态机从 14 个 stage 压到 11 个。
 > - **v3.8（5 月 10 日）**：新增 `ONBOARDED` 终态（招聘流程胜利收尾）。
 > - **v3.8.2（5 月 11 日）**：新增 `OFFER_DECLINED_KEEP`，从 `ROUND2_DONE_REJECT_KEEP` 拆出"拒 Offer 留池"独立终态（事故源 [docs/INCIDENT_RULES.md §14](docs/INCIDENT_RULES.md)）。状态机扩展到 13 个。
+> - **二面确认硬规则**：老板第一次给出的二面时间只是候选人邀请时间；任何上游路径都必须先进入 `ROUND2_SCHEDULING`，候选人确认后再由老板明确授权创建日历并写入 `ROUND2_SCHEDULED`。
 
 ---
 
@@ -143,11 +145,15 @@ ROUND2_SCHEDULING  EXAM_REJECT_KEEP  发拒信 + 物理删除
            ↓
     候选人回复确认（自动扫描，每 8h）
            ↓
+    推飞书提醒老板确认是否建日历
+           ↓
+    老板明确授权创建二面日历
+           ↓
 ROUND2_SCHEDULED
 → 飞书日历已创建（含邀请老板）
            ↓
   ┌────────┼────────────┐
-确认       改期         48h 超时自动确认
+确认       改期         48h 超时提醒老板
            ↓
     老板二面完成后：记录结果
     （二面没有独立"待定"状态，老板想拖延就让候选人停在 ROUND2_SCHEDULED）
@@ -314,7 +320,7 @@ OC 自动发送邀请邮件给候选人，等待候选人回复。
 
 | 意图 | 触发条件 | 系统行为 |
 |------|---------|---------|
-| `confirm` | "可以"、"没问题"、"OK" 等 | 自动确认，创建飞书日历 |
+| `confirm_interview` | "可以"、"没问题"、"OK" 等 | 只推飞书提醒老板确认；老板明确授权后才创建日历并推进到 `ROUND{N}_SCHEDULED` |
 | `reschedule` | "不方便"、"改一下"、"换个时间" 等 | 通知老板，附候选人建议时间 |
 | `request_online` | "线上"、"视频面试"、"腾讯会议" 等 | 通知老板，记录候选人需求 |
 | `defer_until_shanghai` | "暂时不在国内"、"之后再约" 等 | 自动暂缓本轮，等待候选人回上海再约 |
@@ -424,50 +430,50 @@ docs/
 ```bash
 cd /home/admin/recruit-workspace/skills/recruit-ops
 
-# 推荐统一前缀：`uv run python3 -m <module>` （避免子模块 import 路径问题）
+# 推荐统一前缀：`PYTHONPATH=scripts uv run python3 -m <module>` （避免子模块 import 路径问题）
 
 # 录入新候选人
-uv run python3 -m intake.cmd_new_candidate --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
+PYTHONPATH=scripts uv run python3 -m intake.cmd_new_candidate --template "【新候选人】\n姓名：张三\n邮箱：zhangsan@example.com"
 
 # 安排一面（agent 用 lib.run_chain 串以下两步原子 CLI）
-uv run python3 -m outbound.cmd_send --talent-id t_xxxxx --template round1_invite \
+PYTHONPATH=scripts uv run python3 -m outbound.cmd_send --talent-id t_xxxxx --template round1_invite \
   --vars '{"round1_time":"2026-03-25 14:00","interviewer":"老板"}'
-uv run python3 -m talent.cmd_update --talent-id t_xxxxx --stage ROUND1_SCHEDULING \
+PYTHONPATH=scripts uv run python3 -m talent.cmd_update --talent-id t_xxxxx --stage ROUND1_SCHEDULING \
   --set round1_time="2026-03-25 14:00" --set round1_invite_sent_at=__NOW__
 
 # 记录一面结果（通过，进入笔试）
-uv run python3 -m interview.cmd_result --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
+PYTHONPATH=scripts uv run python3 -m interview.cmd_result --talent-id t_xxxxx --round 1 --result pass --email zhangsan@example.com
 
-# 笔试结果（通过，先发候选人邀请；候选人确认后再创建老板日历）
-uv run python3 -m exam.cmd_exam_result --talent-id t_xxxxx --result pass \
+# 笔试结果（通过，先发二面候选时间邀请；候选人确认后仍需老板授权建日历）
+PYTHONPATH=scripts uv run python3 -m exam.cmd_exam_result --talent-id t_xxxxx --result pass \
   --round2-time "2026-04-01 14:00" --interviewer "老板"
 
 # 二面结果
-uv run python3 -m interview.cmd_result --talent-id t_xxxxx --round 2 --result pass --notes "技术扎实，沟通流畅"
+PYTHONPATH=scripts uv run python3 -m interview.cmd_result --talent-id t_xxxxx --round 2 --result pass --notes "技术扎实，沟通流畅"
 
 # 查询状态
-uv run python3 -m common.cmd_status                      # 列出所有候选人
-uv run python3 -m common.cmd_status --talent-id t_xxxxx  # 查单人
+PYTHONPATH=scripts uv run python3 -m common.cmd_status                      # 列出所有候选人
+PYTHONPATH=scripts uv run python3 -m common.cmd_status --talent-id t_xxxxx  # 查单人
 ```
 
 ### 邮件扫描 / 分析（统一走 inbox/）
 
 ```bash
 # 扫所有候选人邮件（写 talent_emails；不调 LLM）
-uv run python3 -m inbox.cmd_scan
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_scan
 
 # 对未分析邮件做 stage 感知 LLM 分类，并按规则推飞书
-uv run python3 -m inbox.cmd_analyze
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_analyze
 
 # 看某候选人邮件时间线
-uv run python3 -m inbox.cmd_review --talent-id t_xxxxx
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_review --talent-id t_xxxxx
 ```
 
 ### 飞书通知
 
 ```bash
 # 推送一条消息给老板
-uv run python3 -m feishu.cmd_notify --to boss --text "需要确认 张三 一面改期"
+PYTHONPATH=scripts uv run python3 -m feishu.cmd_notify --to boss --text "需要确认 张三 一面改期"
 
 # Python 内嵌测试
 uv run python3 -c "import feishu as fc; fc.send_text('测试消息')"
@@ -638,18 +644,18 @@ tail -f /tmp/feishu_calendar_bg.log
 cd /home/admin/recruit-workspace/skills/recruit-ops
 
 # 手动扫所有候选人邮件
-uv run python3 -m inbox.cmd_scan
-uv run python3 -m inbox.cmd_analyze
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_scan
+PYTHONPATH=scripts uv run python3 -m inbox.cmd_analyze
 
 # 或者直接走完整 cron（含 inbox.cmd_scan + analyze + 提醒 + 自动拒绝）
-uv run python3 -m cron.cron_runner
+PYTHONPATH=scripts uv run python3 -m cron.cron_runner
 ```
 
 ### 查看当前候选人
 
 ```bash
 cd /home/admin/recruit-workspace/skills/recruit-ops
-uv run python3 -m common.cmd_status
+PYTHONPATH=scripts uv run python3 -m common.cmd_status
 ```
 
 或直接查数据库：
