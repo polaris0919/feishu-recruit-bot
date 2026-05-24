@@ -15,6 +15,7 @@ from __future__ import print_function
 import argparse
 import io
 import os
+import shlex
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +55,12 @@ _LLM_TO_DB = {
     "resume_summary": "experience",
     "has_cpp":        "has_cpp",
 }
+
+
+def _shell_join(argv):
+    # type: (list) -> str
+    """Shell-quote argv for copy/paste previews; all values are untrusted."""
+    return " ".join(shlex.quote(str(x)) for x in argv)
 
 
 def _fmt_has_cpp(v):
@@ -313,11 +320,11 @@ def _preview_existing(cand, fields, file_path):
             "  • 「**忽略**」— 不做任何变更",
         ]
 
-    # 构建「全部更新」命令
+    # 构建「全部更新」命令。所有字段来自 CV/LLM/邮件输入，必须按 argv 粒度 quote。
     cmd_update = [
-        'python3 intake/cmd_attach_cv.py',
-        '--talent-id "{}"'.format(tid),
-        '--cv-path "{}"'.format(file_path.replace('"', '\\"') if file_path else ""),
+        "python3", "intake/cmd_attach_cv.py",
+        "--talent-id", tid,
+        "--cv-path", file_path or "",
         '--confirm',
     ]
     for col, new_val in changed_cols.items():
@@ -330,24 +337,24 @@ def _preview_existing(cand, fields, file_path):
             else:
                 ser = "null"
         else:
-            ser = str(new_val).replace('"', '\\"')
-        cmd_update.append('--field "{}={}"'.format(col, ser))
+            ser = str(new_val)
+        cmd_update.extend(["--field", "{}={}".format(col, ser)])
 
     # 构建「仅存档」命令
     cmd_archive = [
-        'python3 intake/cmd_attach_cv.py',
-        '--talent-id "{}"'.format(tid),
-        '--cv-path "{}"'.format(file_path.replace('"', '\\"') if file_path else ""),
-        '--confirm',
+        "python3", "intake/cmd_attach_cv.py",
+        "--talent-id", tid,
+        "--cv-path", file_path or "",
+        "--confirm",
     ]
 
     lines += [
         "",
         "[OC_CMD_ON_CONFIRM_UPDATE]",
-        " ".join(cmd_update),
+        _shell_join(cmd_update),
         "",
         "[OC_CMD_ON_CONFIRM_ARCHIVE]",
-        " ".join(cmd_archive),
+        _shell_join(cmd_archive),
         "",
         "[OC_NOTE]",
         "若 HR 只更新部分字段，删除 [OC_CMD_ON_CONFIRM_UPDATE] 中不需要的 --field 参数后执行。",
@@ -408,42 +415,43 @@ def _preview_new(fields, file_path):
         "  • 其他阶段请直接描述",
     ]
 
-    # 构建新候选人确认命令（默认 NEW 阶段），所有字段都包含（含空值占位）
-    def _esc(s):
-        return str(s).replace('"', '\\"')
-
-    cmd_args = ['--name "{}"'.format(_esc(v("name", "")))]
+    # 构建新候选人确认命令（默认 NEW 阶段）。字段来自简历/LLM，按 argv 粒度 quote。
+    cmd = ["uv", "run", "python3", "scripts/intake/cmd_new_candidate.py",
+           "--name", v("name", "")]
     if fields.get("email"):
-        cmd_args.append('--email "{}"'.format(_esc(fields["email"])))
+        cmd.extend(["--email", str(fields["email"])])
     if fields.get("phone"):
-        cmd_args.append('--phone "{}"'.format(_esc(fields["phone"])))
+        cmd.extend(["--phone", str(fields["phone"])])
     if fields.get("wechat"):
-        cmd_args.append('--wechat "{}"'.format(_esc(fields["wechat"])))
+        cmd.extend(["--wechat", str(fields["wechat"])])
     if fields.get("position"):
-        cmd_args.append('--position "{}"'.format(_esc(fields["position"])))
+        cmd.extend(["--position", str(fields["position"])])
     if fields.get("education"):
-        cmd_args.append('--education "{}"'.format(_esc(fields["education"])))
+        cmd.extend(["--education", str(fields["education"])])
     if fields.get("school"):
-        cmd_args.append('--school "{}"'.format(_esc(fields["school"])))
+        cmd.extend(["--school", str(fields["school"])])
     if fields.get("work_years") is not None:
-        cmd_args.append('--work-years {}'.format(fields["work_years"]))
+        try:
+            cmd.extend(["--work-years", str(int(fields["work_years"]))])
+        except (TypeError, ValueError):
+            pass
     if fields.get("source"):
-        cmd_args.append('--source "{}"'.format(_esc(fields["source"])))
+        cmd.extend(["--source", str(fields["source"])])
     if fields.get("resume_summary"):
-        cmd_args.append('--resume-summary "{}"'.format(_esc(fields["resume_summary"])))
+        cmd.extend(["--resume-summary", str(fields["resume_summary"])])
     # v3.5.7：has_cpp 透传给 cmd_new_candidate（true/false/null 三态字符串）
     if fields.get("has_cpp") is True:
-        cmd_args.append('--has-cpp true')
+        cmd.extend(["--has-cpp", "true"])
     elif fields.get("has_cpp") is False:
-        cmd_args.append('--has-cpp false')
+        cmd.extend(["--has-cpp", "false"])
     if file_path:
-        cmd_args.append('--cv-path "{}"'.format(_esc(file_path)))
-    cmd_args.append('--feishu-notify')
+        cmd.extend(["--cv-path", file_path])
+    cmd.append("--feishu-notify")
 
     lines += [
         "",
         "[OC_CMD_ON_CONFIRM]",
-        "uv run python3 scripts/intake/cmd_new_candidate.py {}".format(" ".join(cmd_args)),
+        _shell_join(cmd),
         "",
         "[OC_NOTE]",
         "若 HR 修正了某字段，在 [OC_CMD_ON_CONFIRM] 中替换对应参数的值后执行。",

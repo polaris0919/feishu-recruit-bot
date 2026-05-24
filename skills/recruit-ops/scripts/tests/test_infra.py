@@ -102,26 +102,10 @@ class TestCoreState(unittest.TestCase):
 class TestEmailWatch(unittest.TestCase):
     """SMTP 投递 watcher：失败必须回告警 + 写 audit 事件。"""
 
-    def _fake_send_script(self, exit_code, stderr_msg=""):
-        """在 /tmp 写一个 mock email_send.py，按指定 exit code 退出。"""
-        import tempfile, textwrap
-        f = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", prefix="fake_email_send_",
-            delete=False,
-        )
-        f.write(textwrap.dedent("""\
-            import sys
-            sys.stderr.write({stderr!r})
-            sys.exit({rc})
-        """).format(rc=exit_code, stderr=stderr_msg))
-        f.close()
-        return f.name
-
     def test_watcher_success_no_feishu_no_failure_event(self):
         from lib import email_watch
-        script = self._fake_send_script(0)
         notify_calls, audit_calls = [], []
-        with mock.patch.object(email_watch, "_resolve_email_send_script", return_value=script), \
+        with mock.patch.object(email_watch, "_deliver_email", return_value="<ok@test>"), \
              mock.patch.object(email_watch, "_notify_boss_failure", side_effect=lambda *a, **k: notify_calls.append(a)), \
              mock.patch.object(email_watch, "_record_failure_event", side_effect=lambda *a, **k: audit_calls.append(a)):
             rc = email_watch.main([
@@ -134,7 +118,6 @@ class TestEmailWatch(unittest.TestCase):
 
     def test_watcher_failure_triggers_feishu_and_audit(self):
         from lib import email_watch
-        script = self._fake_send_script(1, stderr_msg="❌ Failed to send email: bad recipient")
         notify_calls, audit_calls = [], []
 
         def _capture_notify(*a, **k):
@@ -143,7 +126,8 @@ class TestEmailWatch(unittest.TestCase):
         def _capture_audit(*a, **k):
             audit_calls.append(a)
 
-        with mock.patch.object(email_watch, "_resolve_email_send_script", return_value=script), \
+        with mock.patch.object(email_watch, "_deliver_email",
+                               side_effect=RuntimeError("bad recipient")), \
              mock.patch.object(email_watch, "_notify_boss_failure", side_effect=_capture_notify), \
              mock.patch.object(email_watch, "_record_failure_event", side_effect=_capture_audit):
             rc = email_watch.main([
@@ -159,6 +143,61 @@ class TestEmailWatch(unittest.TestCase):
         self.assertEqual(a[0], "t_demo")
         self.assertEqual(a[1], "bad@example.com")
         self.assertEqual(a[4], 1)
+
+
+class TestFilePolicy(unittest.TestCase):
+    """本地文件外发边界：默认只允许招聘资料白名单目录。"""
+
+    def test_allows_candidate_artifact_under_data_root(self):
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from lib.file_policy import validate_sendable_file
+
+        root = tempfile.mkdtemp(prefix="file_policy_")
+        old_root = os.environ.get("RECRUIT_DATA_ROOT")
+        os.environ["RECRUIT_DATA_ROOT"] = root
+        try:
+            p = Path(root) / "candidate_cv" / "张三__t_abc" / "cv.pdf"
+            p.parent.mkdir(parents=True)
+            p.write_bytes(b"%PDF")
+            self.assertEqual(validate_sendable_file(str(p)), p.resolve())
+        finally:
+            if old_root is None:
+                os.environ.pop("RECRUIT_DATA_ROOT", None)
+            else:
+                os.environ["RECRUIT_DATA_ROOT"] = old_root
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_rejects_config_even_with_unsafe_override(self):
+        from lib.file_policy import FilePolicyError, validate_sendable_file
+        from lib.recruit_paths import workspace_path
+
+        config_path = str(workspace_path("config", "openclaw.example.json"))
+        with self.assertRaises(FilePolicyError):
+            validate_sendable_file(
+                config_path,
+                allow_unsafe=True,
+                confirm_path=config_path,
+            )
+
+    def test_requires_exact_confirm_for_non_whitelisted_file(self):
+        import tempfile
+        import os as _os
+        from pathlib import Path
+        from lib.file_policy import FilePolicyError, validate_sendable_file
+
+        fd, path = tempfile.mkstemp(prefix="file_policy_public_", suffix=".txt")
+        _os.close(fd)
+        try:
+            with self.assertRaises(FilePolicyError):
+                validate_sendable_file(path)
+            self.assertEqual(
+                validate_sendable_file(path, allow_unsafe=True, confirm_path=path),
+                Path(path).resolve(),
+            )
+        finally:
+            _os.unlink(path)
 
 
 class TestRoundPrefixWhitelist(unittest.TestCase):
@@ -286,7 +325,7 @@ class TestDbFallback(unittest.TestCase):
         """导入候选人时 DB 已配置，应同步并显示已同步。"""
         out, err, rc = call_main("cmd_import_candidate", [
             "--template",
-            "【导入候选人】\n姓名：候选甲\n邮箱：candidate-b@example.com\n当前阶段：待安排二面"
+            "【导入候选人】\n姓名：黄琪\n邮箱：2511391@tongji.edu.cn\n当前阶段：待安排二面"
         ])
         self.assertEqual(rc, 0, "{}|{}".format(out, err))
         self.assertIn("已同步", out)
@@ -338,6 +377,61 @@ class TestFeishu(unittest.TestCase):
              mock.patch.object(feishu, "side_effects_disabled", return_value=False):
             result = feishu.send_text("hello world test")
         self.assertFalse(result)
+
+    def test_send_text_to_boss_mirrors_to_polaris(self):
+        from lib import feishu
+        client = object()
+        cfg = {
+            "boss_open_id": "ou_boss",
+            "polaris_open_id": "ou_polaris",
+            "scheduler_open_id": "",
+        }
+        with mock.patch.object(feishu._cfg, "get", return_value=cfg), \
+             mock.patch.object(feishu, "_get_client", return_value=client), \
+             mock.patch.object(feishu, "side_effects_disabled", return_value=False), \
+             mock.patch.object(feishu, "_send_text_with_retry",
+                               return_value=True) as send_mock:
+            result = feishu.send_text("hello world test")
+        self.assertTrue(result)
+        self.assertEqual(send_mock.call_count, 2)
+        self.assertEqual(send_mock.call_args_list[0].args[1], "ou_boss")
+        self.assertEqual(send_mock.call_args_list[1].args[1], "ou_polaris")
+
+    def test_send_text_explicit_target_does_not_mirror(self):
+        from lib import feishu
+        client = object()
+        cfg = {
+            "boss_open_id": "ou_boss",
+            "polaris_open_id": "ou_polaris",
+            "scheduler_open_id": "",
+        }
+        with mock.patch.object(feishu._cfg, "get", return_value=cfg), \
+             mock.patch.object(feishu, "_get_client", return_value=client), \
+             mock.patch.object(feishu, "side_effects_disabled", return_value=False), \
+             mock.patch.object(feishu, "_send_text_with_retry",
+                               return_value=True) as send_mock:
+            result = feishu.send_text("hello world test", open_id="ou_hr")
+        self.assertTrue(result)
+        send_mock.assert_called_once()
+        self.assertEqual(send_mock.call_args.args[1], "ou_hr")
+
+    def test_send_text_to_polaris_does_not_mirror_again(self):
+        from lib import feishu
+        client = object()
+        cfg = {
+            "boss_open_id": "ou_boss",
+            "polaris_open_id": "ou_polaris",
+            "scheduler_open_id": "",
+        }
+        with mock.patch.object(feishu._cfg, "get", return_value=cfg), \
+             mock.patch.object(feishu, "_get_client", return_value=client), \
+             mock.patch.object(feishu, "side_effects_disabled", return_value=False), \
+             mock.patch.object(feishu, "_send_text_with_retry",
+                               return_value=True) as send_mock:
+            result = feishu.send_text_to_polaris("hello world test")
+        self.assertTrue(result)
+        send_mock.assert_called_once()
+        self.assertEqual(send_mock.call_args.args[1], "ou_polaris")
 
 
 if __name__ == "__main__":

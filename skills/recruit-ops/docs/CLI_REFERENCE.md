@@ -141,6 +141,7 @@ PYTHONPATH=scripts python3 -m outbound.cmd_send \
 | `ops/cmd_db_migrate.py [--status / --apply / --force-file FOO.sql]` | 跑 `lib/migrations/*.sql` 增量迁移；用 `recruit_migrations` 表记账 |
 | `ops/cmd_health_check.py [--skip dashscope]` | DB / IMAP / SMTP / DashScope / Feishu / 邮件积压 6 项体检 |
 | `feishu/cmd_notify.py --title T --body B [--severity warn]` | 任意脚本想推飞书告警都走它（不走 cli_wrapper，避免死循环） |
+| `feishu/cmd_send_file.py --file FILE --to boss\|hr\|polaris` | 通用飞书发文件入口；也支持 `--open-id ou_xxx` |
 | `ops/cmd_replay_notifications.py --talent-id X` | 回放某候选人 / 时间窗的入站分析飞书卡片 |
 
 ### template/ — 邮件模板
@@ -365,7 +366,7 @@ python3 exam/cmd_exam_ai_review.py --talent-id t_xxx --feishu --save-event
 
 评审成功后会写入 `talent_events(action=exam_ai_review)`，并把候选人从 `EXAM_SENT` 推进到 `EXAM_REVIEWED`，随后 `cron.cmd_review_reminder` 才会按 3h 阈值催老板拍板。
 
-**默认行为**：只要传 `--talent-id`，会**自动**从 IMAP 拉取该候选人最新笔试回复邮件（缓存到 `/tmp/exam_submissions/<talent_id>/`），自动从 `_email_body.txt` 读取邮件正文、从 `_email_meta.txt` 的 `Date` 推断 `submitted_at`，自动跳过 `data/raw/原始数据` 等输入数据子目录里的 CSV。无需先手动跑 `fetch_exam_submission.py`。
+**默认行为**：只要传 `--talent-id`，会**自动**从 IMAP 拉取该候选人最新笔试回复邮件（缓存到 `recruit-files/exam_submissions/<姓名>__<talent_id>/`），自动从 `_email_body.txt` 读取邮件正文、从 `_email_meta.txt` 的 `Date` 推断 `submitted_at`，自动跳过 `data/raw/原始数据` 等输入数据子目录里的 CSV。无需先手动跑 `fetch_exam_submission.py`。
 
 **评审结果缓存**：首次跑会调一次 LLM 并把结果写到 `cache_dir/<talent_id>/_ai_review_result.json`。第二次跑（例如加 `--feishu --save-event`）会**复用缓存不再调 LLM**，避免重复扣费。需要重新评审时加 `--rerun`。这种"先终端预览，确认后再推飞书"的两步流程是推荐用法。
 
@@ -400,7 +401,7 @@ python3 exam/cmd_exam_ai_review.py --talent-id t_xxx --no-llm --save-prompt /tmp
 | `--exam-sent-at` | 否 | 题目发出时间（ISO），覆盖 DB 推断 |
 | `--submitted-at` | 否 | 候选人首次提交时间（ISO）；不传时自动从邮件 `Date` 推断 |
 | `--rubric` | 否 | 指定 rubric.json 路径（默认 `exam_files/rubric.json`） |
-| `--cache-dir` | 否 | IMAP / 评审结果的本地缓存根目录（默认 `/tmp/exam_submissions`） |
+| `--cache-dir` | 否 | IMAP / 评审结果的本地缓存根目录；默认写入 `recruit-files/exam_submissions/<姓名>__<talent_id>/`。显式传入时仍使用 `<cache-dir>/<talent_id>/` |
 | `--refetch` | 否 | 强制重新从 IMAP 拉，清掉缓存目录 |
 | `--no-fetch` | 否 | 不去 IMAP 拉，仅用 `--code-dir` 给的本地目录 |
 | `--max-msgs` | 否 | IMAP 最多拉最近 N 封匹配邮件（默认 3） |
@@ -512,7 +513,7 @@ python3 outbound/cmd_send.py \
 | `--in-reply-to <Message-ID>` | 否 | 线程头：原邮件 Message-ID（保线程） |
 | `--references <chain>` | 否 | 线程头：References 链 |
 | `--cc <addr>` | 否 | 抄送 |
-| `--attach FILE` | 否 | 附件路径，可重复；每个 ≤ 20MB。**两个模板已注册自动附件**，agent 不需手动传：`onboarding_offer`（实习协议 + 入职登记表）/ `exam_invite`（笔试题包，v3.8.4 起 resolver 探测 `data/exam_txt/笔试题.{tar.gz,zip,tar}` + `exam_files/exam_package.zip`）；缺失会 fail-fast。 |
+| `--attach FILE` | 否 | 附件路径，可重复；每个 ≤ 20MB。**两个模板已注册自动附件**，agent 不需手动传：`onboarding_offer`（实习协议 + 入职登记表）/ `exam_invite`（笔试题包，resolver 优先探测 `$RECRUIT_DATA_ROOT/exam_package/笔试题.{tar.gz,zip,tar}`，再 fallback 到 `exam_files/exam_package.zip`）；缺失会 fail-fast。 |
 | `--override-subject S` | 否 | **仅 `--use-cached-draft` 模式生效**；模板/自由文本模式传它会直接报 `UserInputError`（v3.6 起） |
 | `--from-name <name>` | 否 | 发件人显示名（默认 `config.email_smtp.from_name`） |
 | `--context {round1,round2,exam,followup,rejection,intake,unknown}` | 否 | 覆盖按 stage 推断的 `talent_emails.context`；`rejection` 留给 auto_reject 用（参与 `has_outbound_rejection` 幂等检查） |
@@ -694,10 +695,10 @@ python3 talent/cmd_update.py --talent-id t_xxx --stage POST_OFFER_FOLLOWUP \
 ### `talent/cmd_delete.py` — 候选人删除唯一出口（破坏性，自动归档）
 
 ```bash
-# 默认归档到 data/deleted_archive/<YYYY-MM>/<talent_id>.json
+# 默认归档到 data/deleted_archive/<YYYY-MM>/：DB 快照 JSON + 候选人文件目录
 python3 talent/cmd_delete.py --talent-id t_xxx --reason "脏数据：测试用例残留"
 
-# 极少：脏测试数据不归档（生产请永远不要 --no-backup）
+# 极少：脏测试数据不写 JSON/timeline 归档；文件目录仍会归档
 python3 talent/cmd_delete.py --talent-id t_xxx --reason "测试残留" --no-backup
 ```
 
@@ -706,8 +707,16 @@ python3 talent/cmd_delete.py --talent-id t_xxx --reason "测试残留" --no-back
 | `--talent-id` | 是 | 候选人 talent_id |
 | `--reason` | 是 | 删除原因（写归档 + 审计事件，事后追溯靠它） |
 | `--actor` | 否 | 默认 `cli` |
-| `--no-backup` | 否 | 跳过归档（极少用，仅清脏测试数据） |
+| `--no-backup` | 否 | 只跳过 DB 快照 JSON / 邮件 timeline 归档；CV、笔试提交、普通邮件附件目录仍会搬到 `deleted_archive` |
 | `--dry-run` / `--json` | 否 | 同其他 atomic CLI |
+
+删除候选人时，`cmd_delete` 会在删 DB 前归档当前正式资料目录：
+
+- `candidate_cv/<姓名>__<talent_id>/`
+- `exam_submissions/<姓名>__<talent_id>/`
+- `candidates/<talent_id>/email/`
+
+如果历史残留的 `candidates/<talent_id>/cv/` 或 `candidates/<talent_id>/exam_answer/` 又出现，也会一并归档。任一已存在文件目录归档失败时，命令会中止，不会删除 DB 行。
 
 > 拒类操作**不要**直接 `talent.cmd_delete` 跳过拒信。人工物理删走 `interview.cmd_result --result reject_delete`（自带先发 `rejection_generic`）；人工留池走 `--result reject_keep`。cron `auto_reject` 是系统规则路径：先发 `rejection_exam_no_reply`，再用 `talent.cmd_delete` 归档删档。
 
@@ -930,6 +939,18 @@ python3 -m auto_reject.cmd_scan_exam_timeout --no-feishu
 
 返回：stdout 一行汇总 `rejected=X, skipped=Y, failed=Z`；非零 exit code 仅在严重 IO/DB 错误时出现，单条候选人发送失败不影响整轮。
 
+### `exam/cmd_send_submission_to_feishu.py` — 发送最新笔试附件到飞书
+
+```bash
+PYTHONPATH=scripts python3 -m exam.cmd_send_submission_to_feishu \
+    --talent-id t_xxx --to hr
+
+PYTHONPATH=scripts python3 -m exam.cmd_send_submission_to_feishu \
+    --talent-id t_xxx --open-id ou_xxx --dry-run --json
+```
+
+用途：查找候选人最新一封 `context='exam'` 且已有保存附件的 inbound 邮件，把附件通过飞书发送给 `boss|hr|polaris|interviewer-*` 或显式 `--open-id`。发送前会附带候选人、邮件时间、主题和 AI 摘要说明。
+
 ### 拒信模板
 
 | 场景 | 模板 | 口吻 |
@@ -968,12 +989,13 @@ PYTHONPATH=scripts python3 -m feishu.cmd_calendar_create \
 
 **固定 attendee（v3.8 起，自动注入，无需 chain 显式传）**：
 
-`feishu.cmd_calendar_create` 内部（`lib.feishu.create_interview_event`）会自动把以下两个 open_id 加为参会人：
+`feishu.cmd_calendar_create` 内部（`lib.feishu.create_interview_event`）会自动把以下 open_id 加为参会人：
 
 1. `lib.config['feishu']['boss_open_id']`（老板）
 2. `lib.config['feishu']['polaris_open_id']`（Polaris，固定日程安排者 / 运营观察者）
+3. `lib.config['feishu']['hr_open_id']`（HR）
 
-**去重保护**：若 `--extra-attendee` 里又传了老板 / Polaris 的 open_id，或一面派单结果与固定参会人重复，会自动去重，不会重复邀请。`master` 表示硕士/博士候选人的一面面试官，不表示老板。
+**去重保护**：若 `--extra-attendee` 里又传了老板 / Polaris / HR 的 open_id，或一面派单结果与固定参会人重复，会自动去重，不会重复邀请。`master` 表示硕士/博士候选人的一面面试官，不表示老板。
 **占位符跳过**：若配置值以 `ou_PLACEHOLDER_` 开头（未配置真实账号的占位符），自动跳过并在返回消息里标注。
 
 参见 `AGENT_RULES.md §3` 护栏与 §4.1 / §4.2 chain。
@@ -1036,9 +1058,39 @@ EOF
 | `--json` | 否 | 结构化 JSON 输出 |
 
 **关键边界**：
-- `--to` 之外的目标（比如临时给某个 open_id 直接推）请走 `lib.feishu.send_text(open_id, msg)`，**不**扩展 `--to` 选项；`cmd_notify` 是"角色路由"层，open_id 配置由 `lib.config` 集中管。
+- `cmd_notify` 是"角色路由"层，open_id 配置由 `lib.config` 集中管。临时给某个 open_id 发送**文件**时走 `feishu.cmd_send_file --open-id ou_xxx`；临时给某个 open_id 发送**文本**目前仍需新增专用 CLI，agent 不要直接 import `lib.feishu`。
 - agent 在 chain 里推飞书**必须**用 `feishu.cmd_notify`（在 chain step 里）而不是 `lib.feishu.send_text`（直接 import）；前者有 self-verify + 失败计入 chain。
 - `severity=critical` 不会触发额外通道（短信 / 电话），只是飞书卡片标题加红色 emoji；真要"叫醒老板"机制目前没有。
+
+### `feishu/cmd_send_file.py` — 飞书发送本地文件
+
+```bash
+PYTHONPATH=scripts python3 -m feishu.cmd_send_file \
+    --file /path/to/file.pdf --to hr --title "候选人 CV"
+
+PYTHONPATH=scripts python3 -m feishu.cmd_send_file \
+    --file /path/to/file.zip --open-id ou_xxx --dry-run --json
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--file FILE` | 是 | 本地文件路径 |
+| `--to {boss,polaris,hr,interviewer-master,interviewer-bachelor,interviewer-cpp}` | 否 | 角色目标，默认 `boss` |
+| `--open-id ou_xxx` | 否 | 显式目标 open_id；提供后覆盖 `--to` |
+| `--title T` | 否 | 发文件前先发一条说明文本 |
+| `--dry-run` / `--json` | 否 | 预览目标、文件名、大小，不上传不发送 |
+
+业务快捷入口：
+
+```bash
+# 发送候选人 CV
+PYTHONPATH=scripts python3 -m talent.cmd_send_cv_to_feishu --talent-id t_xxx --to hr
+
+# 发送候选人最新笔试提交附件
+PYTHONPATH=scripts python3 -m exam.cmd_send_submission_to_feishu --talent-id t_xxx --to boss
+```
+
+`talent.cmd_send_cv_to_feishu` 和 `exam.cmd_send_submission_to_feishu` 都支持 `--to ...` / `--open-id ou_xxx` / `--dry-run` / `--json`。二者都是外部文件发送动作，agent 必须先 dry-run 或只读查询确认文件名与目标，再按 `SKILL.md §2.3.1` propose-confirm 执行。
 
 ---
 

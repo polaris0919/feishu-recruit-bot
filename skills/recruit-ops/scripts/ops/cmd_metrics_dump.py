@@ -130,8 +130,8 @@ def _heartbeat_age_minutes():
     >= 25h 应该是 health_check 已经告警了; 这里把数值露出, 让 dashboard
     画曲线。文件不存在或解析失败返回 -1 (避免与"刚跑过 0 分钟"歧义)。
     """
-    from pathlib import Path
-    path = Path("<RECRUIT_WORKSPACE>/data/.cron_heartbeat")
+    from lib.candidate_storage import data_root
+    path = data_root() / ".cron_heartbeat"
     if not path.is_file():
         return -1.0
     try:

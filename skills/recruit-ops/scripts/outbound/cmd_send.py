@@ -62,6 +62,7 @@ from typing import Optional, Tuple
 from lib import config as _cfg
 from lib import smtp_sender, talent_db
 from lib.cli_wrapper import run_with_self_verify, UserInputError
+from lib.file_policy import FilePolicyError, validate_sendable_file
 from lib.self_verify import assert_email_sent
 
 
@@ -257,6 +258,10 @@ def _build_parser():
     p.add_argument("--attach", action="append", default=[],
                    metavar="FILE",
                    help="附件文件路径，可重复（如 onboarding 资料 docx）。每个 ≤ 20MB")
+    p.add_argument("--allow-unsafe-attach", action="store_true",
+                   help="允许附加白名单目录外的非敏感文件；必须配 --confirm-unsafe-attach")
+    p.add_argument("--confirm-unsafe-attach", action="append", default=[],
+                   help="白名单目录外附件的 resolved path 确认值；多附件可重复")
     p.add_argument("--override-subject", dest="override_subject",
                    help="--use-cached-draft 模式下覆盖默认的 'Re: 原 subject'")
     p.add_argument("--from-name",
@@ -437,7 +442,23 @@ def _do_send(args):
     attach_meta = []   # type: list
 
     def _add_attachment(raw_path, auto):
-        ap = os.path.abspath(raw_path)
+        confirm_candidates = args.confirm_unsafe_attach or []
+        last_policy_error = None
+        for confirm in (confirm_candidates or [None]):
+            try:
+                safe_path = validate_sendable_file(
+                    raw_path,
+                    allow_unsafe=(args.allow_unsafe_attach and not auto),
+                    confirm_path=confirm,
+                )
+                break
+            except FilePolicyError as e:
+                last_policy_error = e
+        else:
+            raise UserInputError(
+                "{} 安全校验失败: {}".format(
+                    "模板默认附件" if auto else "--attach", last_policy_error))
+        ap = str(safe_path)
         if not os.path.isfile(ap):
             raise UserInputError(
                 "{} 文件不存在: {}".format(

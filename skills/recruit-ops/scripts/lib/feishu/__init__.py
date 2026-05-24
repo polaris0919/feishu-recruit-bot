@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Optional
 
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+from lark_oapi.api.im.v1 import (
+    CreateFileRequest,
+    CreateFileRequestBody,
+    CreateMessageRequest,
+    CreateMessageRequestBody,
+)
 from lark_oapi.api.calendar.v4 import (
     Attachment,
     CreateCalendarEventRequest,
@@ -81,22 +86,8 @@ def _do_send_text(client, open_id, text):
     return True
 
 
-def send_text(text, open_id=None):
-    # type: (str, Optional[str]) -> bool
-    if not text or not text.strip():
-        return True
-    if side_effects_disabled():
-        return True
-    feishu = _cfg.get("feishu")
-    open_id = (open_id or feishu.get("boss_open_id", "") or "").strip()
-    client = _get_client()
-    if not client:
-        print("[feishu] 未配置 app_id/app_secret，消息未发送", file=sys.stderr)
-        return False
-    if not open_id:
-        print("[feishu] 未配置 open_id，消息未发送", file=sys.stderr)
-        return False
-
+def _send_text_with_retry(client, open_id, text, label):
+    # type: (object, str, str, str) -> bool
     # 接入统一重试：仅对瞬态错误重试；4xx 业务错保持快速返回 False。
     try:
         from lib.http_retry import call_with_retry
@@ -107,7 +98,7 @@ def send_text(text, open_id=None):
             base=0.8,
             cap=4.0,
             retriable=(_FeishuTransientError, ConnectionError, TimeoutError),
-            label="feishu.send_text",
+            label=label,
         )
     except _FeishuTransientError as e:
         print(str(e), file=sys.stderr)
@@ -115,6 +106,40 @@ def send_text(text, open_id=None):
     except Exception as e:
         print("[feishu] 发消息异常: {}".format(str(e)[:200]), file=sys.stderr)
         return False
+
+
+def send_text(text, open_id=None):
+    # type: (str, Optional[str]) -> bool
+    if not text or not text.strip():
+        return True
+    if side_effects_disabled():
+        return True
+    feishu = _cfg.get("feishu")
+    boss_open_id = (feishu.get("boss_open_id", "") or "").strip()
+    target_open_id = (open_id or boss_open_id or "").strip()
+    polaris_open_id = (
+        feishu.get("polaris_open_id", "") or feishu.get("scheduler_open_id", "")
+        or ""
+    ).strip()
+    client = _get_client()
+    if not client:
+        print("[feishu] 未配置 app_id/app_secret，消息未发送", file=sys.stderr)
+        return False
+    if not target_open_id:
+        print("[feishu] 未配置 open_id，消息未发送", file=sys.stderr)
+        return False
+
+    ok = _send_text_with_retry(client, target_open_id, text, "feishu.send_text")
+
+    # 默认发给 boss 的消息同时镜像给 Polaris；Polaris 失败不影响主链路。
+    if ok and boss_open_id and target_open_id == boss_open_id:
+        if polaris_open_id and polaris_open_id != boss_open_id:
+            mirror_ok = _send_text_with_retry(
+                client, polaris_open_id, text, "feishu.send_text.mirror_polaris"
+            )
+            if not mirror_ok:
+                print("[feishu] Polaris 镜像消息发送失败", file=sys.stderr)
+    return ok
 
 
 def send_text_to_hr(text):
@@ -128,6 +153,66 @@ def send_text_to_polaris(text):
     feishu = _cfg.get("feishu")
     return send_text(text, open_id=(
         feishu.get("polaris_open_id", "") or feishu.get("scheduler_open_id", "")))
+
+
+def upload_im_file(file_path, file_type="stream"):
+    # type: (str, str) -> str
+    """上传 IM 文件，返回 file_key。"""
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    client = _get_client()
+    if not client:
+        raise RuntimeError("飞书未配置 app_id/app_secret")
+    with open(str(path), "rb") as f:
+        req = CreateFileRequest.builder() \
+            .request_body(CreateFileRequestBody.builder()
+                .file_type(file_type)
+                .file_name(path.name)
+                .file(f)
+                .build()) \
+            .build()
+        resp = client.im.v1.file.create(req)
+    if not resp.success():
+        raise RuntimeError("上传飞书文件失败: code={} msg={}".format(resp.code, resp.msg))
+    file_key = getattr(resp.data, "file_key", "") if resp.data else ""
+    if not file_key:
+        raise RuntimeError("上传飞书文件成功但未返回 file_key")
+    return file_key
+
+
+def send_file(file_path, open_id=None, title=None, file_type="stream"):
+    # type: (str, Optional[str], Optional[str], str) -> bool
+    """发送本地文件到指定 open_id；open_id 缺省时走 boss。"""
+    if side_effects_disabled():
+        return True
+    feishu = _cfg.get("feishu")
+    target_open_id = (open_id or feishu.get("boss_open_id", "") or "").strip()
+    if not target_open_id:
+        print("[feishu] 未配置 open_id，文件未发送", file=sys.stderr)
+        return False
+    try:
+        file_key = upload_im_file(file_path, file_type=file_type)
+    except Exception as e:
+        print("[feishu] 上传文件失败: {}".format(e), file=sys.stderr)
+        return False
+    if title:
+        # 说明文本失败不阻塞文件发送。
+        send_text(title, open_id=target_open_id)
+    client = _get_client()
+    req = CreateMessageRequest.builder() \
+        .receive_id_type("open_id") \
+        .request_body(CreateMessageRequestBody.builder()
+            .receive_id(target_open_id)
+            .msg_type("file")
+            .content(json.dumps({"file_key": file_key}))
+            .build()) \
+        .build()
+    resp = client.im.v1.message.create(req)
+    if not resp.success():
+        print("[feishu] 发文件消息失败: code={} msg={}".format(resp.code, resp.msg), file=sys.stderr)
+        return False
+    return True
 
 
 # ─── v3.5.7：三位一面面试官 sink wrapper ─────────────────────────────────────
@@ -192,22 +277,24 @@ def _parse_time_to_timestamp(time_str, duration_minutes=60):
 _CALENDAR_ATTACHMENT_LIMIT_BYTES = 20 * 1024 * 1024
 
 
-def _lookup_candidate_cv_path(talent_id):
-    # type: (str) -> str
+def _lookup_candidate_cv_meta(talent_id):
+    # type: (str) -> tuple
     try:
         from lib import talent_db as _tdb
         if not _tdb._is_enabled():
-            return ""
-        return (_tdb.get_talent_field(talent_id, "cv_path") or "").strip()
+            return "", ""
+        cv_path = (_tdb.get_talent_field(talent_id, "cv_path") or "").strip()
+        candidate_name = (_tdb.get_talent_field(talent_id, "candidate_name") or "").strip()
+        return cv_path, candidate_name
     except Exception as e:
         print("[feishu] 查询候选人 CV 路径失败: {}".format(e), file=sys.stderr)
-        return ""
+        return "", ""
 
 
 def _find_candidate_cv_file(talent_id):
     # type: (str) -> tuple
     """返回 (Path|None, status_source)。优先 DB cv_path，缺失时扫候选人 cv/ 目录。"""
-    cv_path = _lookup_candidate_cv_path(talent_id)
+    cv_path, candidate_name = _lookup_candidate_cv_meta(talent_id)
     if cv_path:
         path = Path(cv_path).expanduser()
         try:
@@ -217,8 +304,8 @@ def _find_candidate_cv_file(talent_id):
         return path, "cv_path"
 
     try:
-        from lib.candidate_storage import cv_dir
-        base = cv_dir(talent_id)
+        from lib.candidate_storage import cv_dir, legacy_cv_dir
+        base = cv_dir(talent_id, candidate_name=candidate_name or None)
         if base.is_dir():
             candidates = [
                 p for p in base.iterdir()
@@ -227,6 +314,15 @@ def _find_candidate_cv_file(talent_id):
             if candidates:
                 candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 return candidates[0].resolve(), "cv_dir"
+        legacy_base = legacy_cv_dir(talent_id)
+        if legacy_base.is_dir():
+            candidates = [
+                p for p in legacy_base.iterdir()
+                if p.is_file() and p.suffix.lower() in (".pdf", ".docx")
+            ]
+            if candidates:
+                candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                return candidates[0].resolve(), "legacy_cv_dir"
     except Exception as e:
         print("[feishu] 扫描候选人 CV 目录失败: {}".format(e), file=sys.stderr)
     return None, "missing"
@@ -264,7 +360,7 @@ def _prepare_cv_calendar_attachment(client, calendar_id, talent_id, enabled=True
         return [], "CV附件：已关闭"
     path, source = _find_candidate_cv_file(talent_id)
     if path is None:
-        return [], "CV附件：未找到 cv_path 或 candidates/<tid>/cv 文件，已跳过"
+        return [], "CV附件：未找到 cv_path 或 candidate_cv/<姓名>__<tid> 文件，已跳过"
 
     if not path.is_file():
         return [], "CV附件：文件不存在，已跳过 ({})".format(path)
@@ -407,7 +503,8 @@ def create_interview_event(
         msg += "\n  - 直达链接: {}".format(app_link)
     msg += "\n  - {}".format(cv_status)
 
-    # 收集所有 attendee：boss + Polaris（固定日程安排者）+ extras，去重 + 跳占位符。
+    # 收集所有 attendee：boss + Polaris（固定日程安排者）+
+    # HR + extras，去重 + 跳占位符。
     # 一面 extras 应为路由出的真实面试官；二面通常不传 extras。
     attendee_open_ids = []
     seen = set()
@@ -421,6 +518,13 @@ def create_interview_event(
         elif polaris_open_id not in seen:
             attendee_open_ids.append(("polaris", polaris_open_id))
             seen.add(polaris_open_id)
+    hr_open_id = (feishu.get("hr_open_id", "") or "").strip()
+    if hr_open_id:
+        if hr_open_id.startswith(_PLACEHOLDER_PREFIX):
+            skipped_placeholders.append(hr_open_id)
+        elif hr_open_id not in seen:
+            attendee_open_ids.append(("hr", hr_open_id))
+            seen.add(hr_open_id)
     for oid in (extra_attendee_open_ids or []):
         oid = (oid or "").strip()
         if not oid or oid in seen:
@@ -457,6 +561,8 @@ def create_interview_event(
                     tags.append("老板")
                 elif tag == "polaris":
                     tags.append("Polaris（日程安排者）")
+                elif tag == "hr":
+                    tags.append("HR")
                 else:
                     tags.append("面试官")
             msg += "\n  - 已成功邀请参与者：{}（共 {} 人）".format(

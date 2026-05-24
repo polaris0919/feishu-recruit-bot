@@ -9,8 +9,8 @@ exam/fetch_exam_submission._download_message + 通用化）。
   - 安全化文件名（防路径穿越、防奇怪字符）
   - 拒绝超大、空、黑名单文件名（winmail.dat、ATT00001.txt）
   - 落盘到 lib.candidate_storage.attachment_dir(talent_id, context, email_id)
-    即 candidates/<tid>/{exam_answer|email}/em_<email_id>/<filename>
-    （context='exam' 走 exam_answer/，其他走 email/）
+    即 context='exam' 走 exam_submissions/<候选人__tid>/，其他走
+    candidates/<tid>/email/em_<email_id>/<filename>
   - 文件权限 0o600，目录 0o700（仅 owner 可读）
   - 不解压压缩包（zip/rar 原样存储；解压逻辑保留在 exam/fetch_exam_submission，
     那是按需手动评审用的，跟 cmd_scan 落盘语义不同）
@@ -48,6 +48,7 @@ import mimetypes
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -57,8 +58,8 @@ from lib.side_effect_guard import side_effects_disabled
 
 # ─── 常量 ─────────────────────────────────────────────────────────────────────
 
-# v3.5.8：附件落盘路径全部由 lib.candidate_storage 决定，按 talent_emails.context
-# 分流到 candidates/<tid>/exam_answer/ 或 candidates/<tid>/email/。
+# v3.9：附件落盘路径全部由 lib.candidate_storage 决定。context='exam'
+# 分流到 exam_submissions/<候选人__tid>/；其他仍进 candidates/<tid>/email/。
 # 旧的 ATTACHMENT_ROOT = data/candidate_answer 已下线；调用方一律通过
 # extract_and_save(..., context=...) 让 candidate_storage 算路径。
 # 元数据 path 字段写「相对 data_root() 的路径」，便于跨机器迁移和审计。
@@ -189,6 +190,60 @@ def _unique_path(directory, filename):
         "文件名冲突无法解决: {} 在 {} 已有上千同名".format(filename, directory))
 
 
+def _limit_bytes(text, limit):
+    # type: (str, int) -> str
+    encoded = (text or "").encode("utf-8")
+    if len(encoded) <= limit:
+        return text or ""
+    return encoded[:max(1, limit)].decode("utf-8", errors="ignore") or "x"
+
+
+def _safe_label(raw, fallback):
+    # type: (Optional[str], str) -> str
+    value = _safe_name(str(raw or "").strip())
+    if value == "unnamed.bin":
+        value = fallback
+    return _limit_bytes(value, 60)
+
+
+def _date_label(sent_at):
+    # type: (Optional[Any]) -> str
+    if isinstance(sent_at, datetime):
+        return sent_at.strftime("%Y-%m-%d")
+    if sent_at:
+        s = str(sent_at).strip()
+        if len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
+            return s[:10]
+    return "unknown-date"
+
+
+def _exam_submission_dirname(talent_id, candidate_name=None):
+    # type: (str, Optional[str]) -> str
+    return "{}__{}".format(
+        _safe_label(candidate_name, "未命名"),
+        _safe_label(talent_id, "unknown-talent"),
+    )
+
+
+def _exam_submission_filename(filename, talent_id, email_id,
+                              candidate_name=None, sent_at=None):
+    # type: (str, str, str, Optional[str], Optional[Any]) -> str
+    """构造候选人目录内的人工可读笔试附件名，并控制整段文件名字节长度。"""
+    original = _safe_name(filename)
+    date_part = _date_label(sent_at)
+    eid_part = _safe_label(email_id, "unknown-email")
+    prefix = "{}__em_{}__".format(date_part, eid_part)
+
+    max_total = 240
+    if len((prefix + original).encode("utf-8")) <= max_total:
+        return prefix + original
+
+    stem, ext = os.path.splitext(original)
+    ext_bytes = len(ext.encode("utf-8"))
+    keep = max(1, max_total - len(prefix.encode("utf-8")) - ext_bytes)
+    return prefix + _limit_bytes(stem, keep) + ext
+
+
 def _sha256(data):
     # type: (bytes) -> str
     h = hashlib.sha256()
@@ -231,14 +286,14 @@ def extract_metadata(msg):
     return out
 
 
-def extract_and_save(msg, talent_id, email_id, context=None):
-    # type: (Any, str, str, Optional[str]) -> List[Dict[str, Any]]
+def extract_and_save(msg, talent_id, email_id, context=None,
+                     candidate_name=None, sent_at=None):
+    # type: (Any, str, str, Optional[str], Optional[str], Optional[Any]) -> List[Dict[str, Any]]
     """遍历 msg 的附件，逐个落盘到候选人资料目录，返回元数据列表。
 
-    v3.5.8：落盘根由 lib.candidate_storage.attachment_dir 决定：
-      - context=='exam' → candidates/<tid>/exam_answer/em_<eid>/<file>
+    v3.9：落盘根由 lib.candidate_storage.attachment_dir 决定：
+      - context=='exam' → exam_submissions/<name>__<tid>/<date>__em_<eid>__<file>
       - 其他            → candidates/<tid>/email/em_<eid>/<file>
-    （顺手修了 v3.5.6 的 t_t_<tid> 多余前缀 bug。）
 
     幂等性：
       - 每个 email_id 是 UUID，base_dir 唯一
@@ -257,9 +312,13 @@ def extract_and_save(msg, talent_id, email_id, context=None):
     if not talent_id or not email_id:
         raise ValueError("extract_and_save 需要 talent_id 和 email_id")
 
-    from lib.candidate_storage import attachment_dir, data_root
+    from lib.candidate_storage import attachment_dir, data_root, exam_submission_dir
     is_dry = side_effects_disabled()
+    ctx_norm = (context or "").strip().lower()
+    is_exam = ctx_norm == "exam"
     base_dir = attachment_dir(talent_id, context, email_id)
+    if is_exam:
+        base_dir = exam_submission_dir(talent_id, candidate_name=candidate_name)
     _root = data_root()  # 用于把 path 算成相对 data_root 的相对路径
 
     out = []
@@ -326,12 +385,18 @@ def extract_and_save(msg, talent_id, email_id, context=None):
 
         if is_dry:
             # dry-run：算完就算（path 给相对 data_root 的预期路径）
+            target_name = (
+                _exam_submission_filename(decoded, talent_id, email_id,
+                                          candidate_name=candidate_name,
+                                          sent_at=sent_at)
+                if is_exam else decoded
+            )
             try:
-                rel_dry = (base_dir / decoded).relative_to(_root)
+                rel_dry = (base_dir / target_name).relative_to(_root)
             except ValueError:
-                rel_dry = base_dir / decoded
+                rel_dry = base_dir / target_name
             out.append({
-                "name": decoded, "size": size, "mime": mime,
+                "name": target_name, "size": size, "mime": mime,
                 "path": str(rel_dry),
                 "sha256": sha,
                 "saved": False,
@@ -340,7 +405,13 @@ def extract_and_save(msg, talent_id, email_id, context=None):
             saved_count += 1
             continue
 
-        target = _unique_path(base_dir, decoded)
+        target_name = (
+            _exam_submission_filename(decoded, talent_id, email_id,
+                                      candidate_name=candidate_name,
+                                      sent_at=sent_at)
+            if is_exam else decoded
+        )
+        target = _unique_path(base_dir, target_name)
         try:
             with open(str(target), "wb") as f:
                 f.write(payload)

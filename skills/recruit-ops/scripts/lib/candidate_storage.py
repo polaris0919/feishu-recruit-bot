@@ -3,10 +3,17 @@
 
 【目标】
   每个候选人在 $RECRUIT_DATA_ROOT/candidates/<talent_id>/ 下有一个独立目录，
-  内部三个固定子目录：
-      cv/            候选人 CV 原件（cmd_attach_cv 复制 / 移动进来）
-      exam_answer/   笔试答案附件（context='exam' 的邮件附件）
+  内部两个固定子目录：
+      exam_answer/   旧版 / 手动拉取兼容目录（新入站笔试附件不再写这里）
       email/         其他邮件附件（context!='exam' 的邮件附件）
+
+  CV 原件统一按候选人姓名 + talent_id 归档到：
+      $RECRUIT_DATA_ROOT/candidate_cv/<candidate_name>__<talent_id>/
+
+  新入站笔试答案附件统一按候选人分组落到：
+      $RECRUIT_DATA_ROOT/exam_submissions/<candidate_name>__<talent_id>/
+  笔试题包统一放到：
+      $RECRUIT_DATA_ROOT/exam_package/
 
   不再用旧的 data/candidate_answer/t_t_<tid>/em_<eid>/ 布局（v3.5.6 写歪
   多了一个 t_ 前缀，借这次顺手修），也不再让 CV 留在 data/media/inbound/
@@ -48,31 +55,35 @@
 from __future__ import annotations
 
 import errno
+import hashlib
+import json
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from lib.recruit_paths import workspace_path
 from lib.side_effect_guard import side_effects_disabled
 
 
 # ─── 常量 ─────────────────────────────────────────────────────────────────────
 
-_DEFAULT_DATA_ROOT = workspace_path("data")
+_DEFAULT_DATA_ROOT = Path("/home/admin/recruit-files")
 
-# 三个固定子目录名（顺序固定，便于 ensure_candidate_dirs 输出 stable）
-_SUBDIRS = ("cv", "exam_answer", "email")
+# 候选人目录固定子目录名（顺序固定，便于 ensure_candidate_dirs 输出 stable）。
+# CV 已迁出 candidates/<tid>/cv，统一放到 candidate_cv/<name>__<tid>/。
+_SUBDIRS = ("exam_answer", "email")
 
 # 目录权限：仅 owner（ops 用户）可读写。CV 和笔试答案都涉及隐私 / 候选人作品,
 # 默认 0o700。文件权限单独由调用方（email_attachments.py 用 0o600）控制。
 _DIR_MODE = 0o700
 
 # 飞书 Gateway 把附件落盘时会前缀 `doc_<12 hex>_`，纯属内部 ID，不属于候选人原文件名。
-# 我们落到 candidates/<tid>/cv/ 时统一剥掉，省得档案路径里挂一串 hash。
+# 我们落到 candidate_cv/<name>__<tid>/ 时统一剥掉，省得档案路径里挂一串 hash。
 # 兼容 8~32 位 hex，避免后续飞书改长度时炸掉。
 _FEISHU_DOC_PREFIX_RE = re.compile(r"^doc_[0-9a-f]{8,32}_+")
+_UNSAFE_COMPONENT_RE = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
 
 
 # ─── 路径计算（纯函数） ───────────────────────────────────────────────────────
@@ -89,6 +100,12 @@ def candidates_root():
     return data_root() / "candidates"
 
 
+def candidate_cv_root():
+    # type: () -> Path
+    """候选人 CV 原件的人工浏览根目录。"""
+    return data_root() / "candidate_cv"
+
+
 def candidate_dir(talent_id):
     # type: (str) -> Path
     """单个候选人的根目录。不创建，仅算路径。"""
@@ -96,14 +113,56 @@ def candidate_dir(talent_id):
     return candidates_root() / talent_id
 
 
-def cv_dir(talent_id):
+def cv_folder_name(talent_id, candidate_name=None):
+    # type: (str, Optional[str]) -> str
+    """CV 目录名：<candidate_name>__<talent_id>。"""
+    _validate_talent_id(talent_id)
+    name = _safe_dir_component(candidate_name, fallback="未命名")
+    return "{}__{}".format(name, talent_id.strip())
+
+
+def cv_dir(talent_id, candidate_name=None):
+    # type: (str, Optional[str]) -> Path
+    """候选人 CV 目录。
+
+    传入 candidate_name 时按新规范返回 candidate_cv/<姓名>__<tid>/。
+    未传姓名时优先复用已有的 *__<tid> 目录；用于旧 caller 和 fallback。
+    """
+    if candidate_name:
+        return candidate_cv_root() / cv_folder_name(talent_id, candidate_name)
+    existing = _find_existing_cv_dir(talent_id)
+    if existing:
+        return existing
+    return candidate_cv_root() / cv_folder_name(talent_id, None)
+
+
+def legacy_cv_dir(talent_id):
     # type: (str) -> Path
+    """旧 CV 目录 candidates/<tid>/cv，仅用于迁移 / fallback。"""
     return candidate_dir(talent_id) / "cv"
 
 
 def exam_answer_dir(talent_id):
     # type: (str) -> Path
     return candidate_dir(talent_id) / "exam_answer"
+
+
+def exam_submissions_dir():
+    # type: () -> Path
+    """所有候选人笔试答案附件的人工浏览根目录。"""
+    return data_root() / "exam_submissions"
+
+
+def exam_submission_dir(talent_id, candidate_name=None):
+    # type: (str, Optional[str]) -> Path
+    """单个候选人的统一笔试提交目录。"""
+    return exam_submissions_dir() / cv_folder_name(talent_id, candidate_name)
+
+
+def exam_package_dir():
+    # type: () -> Path
+    """发给候选人的笔试题包目录。"""
+    return data_root() / "exam_package"
 
 
 def email_dir(talent_id):
@@ -113,10 +172,10 @@ def email_dir(talent_id):
 
 def attachment_dir(talent_id, context, email_id):
     # type: (str, Optional[str], str) -> Path
-    """根据 talent_emails.context 决定附件落 exam_answer/ 还是 email/。
+    """根据 talent_emails.context 决定附件落 exam_submissions/ 还是 email/。
 
     context 归一化（大小写 / 前后空格不敏感）：
-      'exam'              → exam_answer/em_<email_id>/
+      'exam'              → exam_submissions/
       其他（包括 None / '') → email/em_<email_id>/
 
     只算路径，不 mkdir。调用方（email_attachments.extract_and_save）自己
@@ -125,8 +184,9 @@ def attachment_dir(talent_id, context, email_id):
     if not email_id or not str(email_id).strip():
         raise ValueError("attachment_dir 需要非空 email_id")
     ctx_norm = (context or "").strip().lower()
-    base = exam_answer_dir(talent_id) if ctx_norm == "exam" else email_dir(talent_id)
-    return base / "em_{}".format(str(email_id).strip())
+    if ctx_norm == "exam":
+        return exam_submissions_dir()
+    return email_dir(talent_id) / "em_{}".format(str(email_id).strip())
 
 
 # ─── 写入入口（唯一会动盘的函数） ─────────────────────────────────────────────
@@ -184,9 +244,9 @@ def ensure_candidate_dirs(talent_id):
     return payload
 
 
-def import_cv(talent_id, src_path, mode="move"):
-    # type: (str, str, str) -> Path
-    """把 src_path 的 CV 文件搬 / 复制到 cv_dir(talent_id) 下。
+def import_cv(talent_id, src_path, mode="move", candidate_name=None):
+    # type: (str, str, str, Optional[str]) -> Path
+    """把 src_path 的 CV 文件搬 / 复制到 cv_dir(talent_id, candidate_name) 下。
 
     返回新文件的绝对 Path。
 
@@ -195,7 +255,7 @@ def import_cv(talent_id, src_path, mode="move"):
       'copy'         ：保留原文件（迁移脚本 dry-run / 极少数怕丢原件场景）
 
     幂等 / 重名处理：
-      - src_path 已经在 cv_dir(talent_id) 下 → no-op，直接返回 src_path
+      - src_path 已经在 cv_dir(talent_id, candidate_name) 下 → no-op，直接返回 src_path
       - cv_dir 下已有同名文件且内容不同 → 加 (2) / (3) ... 后缀
       - cv_dir 下已有同名且 size + mtime 一致 → 当作幂等重跑，no-op
 
@@ -209,10 +269,12 @@ def import_cv(talent_id, src_path, mode="move"):
     if mode not in ("move", "copy"):
         raise ValueError("import_cv mode 必须是 'move' / 'copy'，给的是 {!r}".format(mode))
 
-    target_dir = cv_dir(talent_id)
+    target_dir = cv_dir(talent_id, candidate_name=candidate_name)
     # 已经在目标目录里 → no-op
     try:
         src.relative_to(target_dir)
+        if not side_effects_disabled():
+            _write_cv_manifest(talent_id, candidate_name, src, source_path=src)
         return src
     except ValueError:
         pass
@@ -225,9 +287,12 @@ def import_cv(talent_id, src_path, mode="move"):
 
     # 真正落盘：先确保目录在
     ensure_candidate_dirs(talent_id)
+    target_dir.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
+    original_target = target
     target = _resolve_collision(target, src)
     if target == src:  # _resolve_collision 判定幂等
-        return target
+        _write_cv_manifest(talent_id, candidate_name, original_target, source_path=src)
+        return original_target
 
     if mode == "move":
         # shutil.move 跨设备时退化为 copy + remove；同 fs 是原子 rename
@@ -238,6 +303,7 @@ def import_cv(talent_id, src_path, mode="move"):
         os.chmod(str(target), 0o600)
     except OSError:
         pass  # 权限设置失败不致命
+    _write_cv_manifest(talent_id, candidate_name, target, source_path=src)
     return target
 
 
@@ -267,6 +333,82 @@ def strip_feishu_prefix(filename):
 
 
 # ─── 内部辅助 ────────────────────────────────────────────────────────────────
+
+def _safe_dir_component(raw, fallback):
+    # type: (Optional[str], str) -> str
+    """把姓名等外部文本清洗成单个安全目录名片段。"""
+    value = str(raw or "").strip()
+    value = _UNSAFE_COMPONENT_RE.sub("_", value)
+    value = value.strip(" .")
+    if not value:
+        value = fallback
+    encoded = value.encode("utf-8")
+    if len(encoded) <= 80:
+        return value
+    return encoded[:80].decode("utf-8", errors="ignore") or fallback
+
+
+def _find_existing_cv_dir(talent_id):
+    # type: (str) -> Optional[Path]
+    """按 *__<tid> 查找已有 candidate_cv 目录。"""
+    _validate_talent_id(talent_id)
+    root = candidate_cv_root()
+    if not root.is_dir():
+        return None
+    matches = [p for p in root.glob("*__{}".format(talent_id.strip())) if p.is_dir()]
+    if not matches:
+        return None
+    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0]
+
+
+def _file_sha256(path):
+    # type: (Path) -> str
+    h = hashlib.sha256()
+    with open(str(path), "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_cv_manifest(talent_id, candidate_name, cv_path, source_path=None):
+    # type: (str, Optional[str], Path, Optional[Path]) -> None
+    """在 candidate_cv/<name>__<tid>/_manifest.json 写当前 CV 元数据。"""
+    try:
+        path = Path(cv_path).expanduser().resolve()
+        manifest = path.parent / "_manifest.json"
+        data = {}
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        history = data.get("history") if isinstance(data.get("history"), list) else []
+        entry = {
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "file": str(path),
+            "file_name": path.name,
+            "size": path.stat().st_size,
+            "sha256": _file_sha256(path),
+            "source_path": str(source_path) if source_path else None,
+        }
+        history.append(entry)
+        data = {
+            "talent_id": talent_id,
+            "candidate_name": candidate_name,
+            "current_cv": str(path),
+            "updated_at": entry["at"],
+            "history": history[-20:],
+        }
+        manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(str(manifest), 0o600)
+        except OSError:
+            pass
+    except Exception:
+        # manifest 是人工浏览辅助，不影响主流程。
+        return
+
 
 def _validate_talent_id(talent_id):
     # type: (str) -> None

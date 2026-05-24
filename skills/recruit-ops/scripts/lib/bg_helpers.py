@@ -23,6 +23,7 @@ import time
 from typing import Dict, Iterable, List, Optional
 
 from lib.cli_subprocess import build_subprocess_env, run_module
+from lib.private_logs import append_private_log, private_log_path, write_private_text
 from lib.recruit_paths import scripts_dir
 from lib.side_effect_guard import fake_pid, side_effects_disabled
 
@@ -45,9 +46,11 @@ def send_bg_email(to, subject, body, tag="email", attachments=None,
     传 talent_id / candidate_name 可让告警更可读，且失败事件能挂到对应候选人。"""
     if side_effects_disabled():
         return fake_pid()
-    log_path = "/tmp/email_{}_{}_{}.log".format(tag, to.replace("@", "_"), int(time.time()))
+    log_path = str(private_log_path("email_{}".format(tag)))
+    body_path = private_log_path("email_body_{}".format(tag), suffix=".txt")
+    write_private_text(body_path, body or "")
     cmd = [sys.executable, "-m", "lib.email_watch",
-           "--to", to, "--subject", subject, "--body", body,
+           "--to", to, "--subject", subject, "--body-file", str(body_path),
            "--tag", tag, "--log-path", log_path]
     if talent_id:
         cmd += ["--talent-id", talent_id]
@@ -56,7 +59,7 @@ def send_bg_email(to, subject, body, tag="email", attachments=None,
     for attachment in (attachments or []):
         if attachment:
             cmd += ["--attachment", attachment]
-    watcher_log = "/tmp/email_watch_{}_{}.log".format(tag, int(time.time()))
+    watcher_log = str(private_log_path("email_watch_{}".format(tag)))
     log_fp = open(watcher_log, "w")
     proc = subprocess.Popen(
         cmd,
@@ -66,9 +69,11 @@ def send_bg_email(to, subject, body, tag="email", attachments=None,
         env=_recruit_subprocess_env(),
     )
     log_fp.close()
-    with open("/tmp/email_bg.log", "a") as f:
-        f.write("[{}] {} to={} watcher_PID={} smtp_log={} watcher_log={}\n".format(
-            time.strftime("%Y-%m-%d %H:%M:%S"), tag, to, proc.pid, log_path, watcher_log))
+    append_private_log(
+        "email_bg.log",
+        "[{}] {} watcher_PID={} smtp_log={} watcher_log={}".format(
+            time.strftime("%Y-%m-%d %H:%M:%S"), tag, proc.pid, log_path, watcher_log)
+    )
     return proc.pid
 
 
@@ -158,7 +163,7 @@ def spawn_calendar(
     if old_event_id:
         cmd += ["--old-event-id", old_event_id]
 
-    log_path = "/tmp/feishu_cal_{}_{}_{}.log".format(tag, talent_id, int(time.time()))
+    log_path = str(private_log_path("feishu_cal_{}_{}".format(tag, talent_id)))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(
         cmd,
@@ -170,9 +175,10 @@ def spawn_calendar(
         env=_recruit_subprocess_env(),
     )
     log_fp.close()
-    with open("/tmp/feishu_calendar_bg.log", "a") as f:
-        f.write("[{}] {} PID={} log={}\n".format(
-            time.strftime("%Y-%m-%d %H:%M:%S"), tag, proc.pid, log_path))
+    append_private_log(
+        "feishu_calendar_bg.log",
+        "[{}] {} PID={} log={}".format(time.strftime("%Y-%m-%d %H:%M:%S"), tag, proc.pid, log_path)
+    )
     return proc.pid
 
 
@@ -185,7 +191,7 @@ def delete_calendar(event_id, tag="cal_delete"):
         return fake_pid()
     cmd = [sys.executable, "-m", "feishu.cmd_calendar_delete",
            "--event-id", event_id, "--reason", tag, "--json"]
-    log_path = "/tmp/feishu_cal_delete_{}_{}.log".format(event_id[:16], int(time.time()))
+    log_path = str(private_log_path("feishu_cal_delete_{}".format(event_id[:16])))
     log_fp = open(log_path, "w")
     proc = subprocess.Popen(
         cmd,
@@ -197,7 +203,8 @@ def delete_calendar(event_id, tag="cal_delete"):
         env=_recruit_subprocess_env(),
     )
     log_fp.close()
-    with open("/tmp/feishu_calendar_bg.log", "a") as f:
-        f.write("[{}] {} PID={} log={}\n".format(
-            time.strftime("%Y-%m-%d %H:%M:%S"), tag, proc.pid, log_path))
+    append_private_log(
+        "feishu_calendar_bg.log",
+        "[{}] {} PID={} log={}".format(time.strftime("%Y-%m-%d %H:%M:%S"), tag, proc.pid, log_path)
+    )
     return proc.pid

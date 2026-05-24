@@ -11,8 +11,8 @@ fetch_for() 拉取。本 CLI 仅在你想单独看候选人提交内容（不评
     python3 exam/fetch_exam_submission.py --talent-id t_xxx [--out /tmp/exam/<id>]
     python3 exam/fetch_exam_submission.py --email someone@example.com [--out ...]
 
-默认输出目录（v3.5.8）：
-  - 提供了 --talent-id：data/candidates/<talent_id>/exam_answer/legacy_fetch/
+默认输出目录：
+  - 提供了 --talent-id：data/exam_submissions/<姓名>__<talent_id>/legacy_fetch/
   - 仅有邮箱：/tmp/exam_submissions/<邮箱前缀>/（兜底）
 """
 from __future__ import print_function
@@ -23,6 +23,7 @@ import io
 import os
 import sys
 import zipfile
+from pathlib import Path
 from typing import List, Optional
 
 from lib.core_state import get_tdb
@@ -38,6 +39,9 @@ _CODE_EXTS = {".py", ".ipynb", ".cpp", ".cc", ".c", ".h", ".hpp",
               ".java", ".js", ".ts", ".r", ".sql", ".m", ".sh",
               ".md", ".txt", ".rst", ".csv", ".json", ".tsv"}
 _ARCHIVE_EXTS = {".zip", ".rar"}
+_MAX_EXTRACT_FILES = 100
+_MAX_EXTRACT_FILE_BYTES = 25 * 1024 * 1024
+_MAX_EXTRACT_TOTAL_BYTES = 100 * 1024 * 1024
 
 
 def _safe_name(name):
@@ -48,23 +52,69 @@ def _safe_name(name):
     return base
 
 
+def _safe_extract_target(out_dir, member_name):
+    # type: (str, str) -> Path
+    """Return a resolved extraction target under out_dir or raise ValueError."""
+    raw = (member_name or "").replace("\\", "/").strip()
+    if not raw or raw.endswith("/"):
+        raise ValueError("空文件名或目录项")
+    pure = Path(raw)
+    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        raise ValueError("拒绝不安全压缩包路径: {}".format(member_name))
+    base = Path(out_dir).expanduser().resolve()
+    target = (base / pure).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise ValueError("拒绝写出目标目录: {}".format(member_name))
+    return target
+
+
+def _write_limited(src, target, remaining_total):
+    # type: (object, Path, int) -> int
+    written = 0
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(str(target), "wb") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > _MAX_EXTRACT_FILE_BYTES:
+                raise ValueError("单文件解压超过上限 {} bytes".format(_MAX_EXTRACT_FILE_BYTES))
+            if written > remaining_total:
+                raise ValueError("压缩包总解压超过上限 {} bytes".format(_MAX_EXTRACT_TOTAL_BYTES))
+            dst.write(chunk)
+    try:
+        os.chmod(str(target), 0o600)
+    except OSError:
+        pass
+    return written
+
+
 def _extract_archive_to(payload, fname, out_dir):
     written = []
     ext = os.path.splitext(fname)[1].lower()
+    total_bytes = 0
+    file_count = 0
     try:
         if ext == ".zip":
             with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-                for name in zf.namelist():
-                    if name.endswith("/"):
+                for info in zf.infolist():
+                    name = info.filename
+                    if info.is_dir():
                         continue
-                    target = os.path.join(out_dir, name)
-                    target_dir = os.path.dirname(target)
-                    if target_dir and not os.path.isdir(target_dir):
-                        os.makedirs(target_dir, exist_ok=True)
                     try:
-                        with zf.open(name) as src, open(target, "wb") as dst:
-                            dst.write(src.read())
-                        written.append(target)
+                        if info.file_size > _MAX_EXTRACT_FILE_BYTES:
+                            raise ValueError("单文件声明大小超过上限: {}".format(name))
+                        file_count += 1
+                        if file_count > _MAX_EXTRACT_FILES:
+                            raise ValueError("压缩包文件数超过上限 {}".format(_MAX_EXTRACT_FILES))
+                        target = _safe_extract_target(out_dir, name)
+                        with zf.open(info) as src:
+                            total_bytes += _write_limited(
+                                src, target, _MAX_EXTRACT_TOTAL_BYTES - total_bytes)
+                        written.append(str(target))
                     except Exception as e:
                         print("[warn] 解压失败 {}: {}".format(name, e), file=sys.stderr)
         elif ext == ".rar":
@@ -74,17 +124,21 @@ def _extract_archive_to(payload, fname, out_dir):
                 print("[warn] 未安装 rarfile，无法解压 {}".format(fname), file=sys.stderr)
                 return written
             with rarfile.RarFile(io.BytesIO(payload)) as rf:
-                for name in rf.namelist():
+                for info in rf.infolist():
+                    name = info.filename
                     if name.endswith("/"):
                         continue
-                    target = os.path.join(out_dir, name)
-                    target_dir = os.path.dirname(target)
-                    if target_dir and not os.path.isdir(target_dir):
-                        os.makedirs(target_dir, exist_ok=True)
                     try:
-                        with rf.open(name) as src, open(target, "wb") as dst:
-                            dst.write(src.read())
-                        written.append(target)
+                        if getattr(info, "file_size", 0) > _MAX_EXTRACT_FILE_BYTES:
+                            raise ValueError("单文件声明大小超过上限: {}".format(name))
+                        file_count += 1
+                        if file_count > _MAX_EXTRACT_FILES:
+                            raise ValueError("压缩包文件数超过上限 {}".format(_MAX_EXTRACT_FILES))
+                        target = _safe_extract_target(out_dir, name)
+                        with rf.open(info) as src:
+                            total_bytes += _write_limited(
+                                src, target, _MAX_EXTRACT_TOTAL_BYTES - total_bytes)
+                        written.append(str(target))
                     except Exception as e:
                         print("[warn] 解压失败 {}: {}".format(name, e), file=sys.stderr)
     except Exception as e:
@@ -176,9 +230,10 @@ def fetch_for(email_addr=None, talent_id=None, exam_id=None, out=None, max_msgs=
         # v3.5.8：默认落到候选人专属目录，不再丢 /tmp（自动清理风险 + 散落）
         # 仅当能拿到 talent_id 才走新路径；否则退回 /tmp（无主邮件没法归类）
         if talent_id:
-            from lib.candidate_storage import exam_answer_dir, ensure_candidate_dirs
+            from lib.candidate_storage import exam_submission_dir, ensure_candidate_dirs
             ensure_candidate_dirs(talent_id)
-            out = str(exam_answer_dir(talent_id) / "legacy_fetch")
+            out = str(exam_submission_dir(
+                talent_id, cand.get("candidate_name") or cand.get("name")) / "legacy_fetch")
         else:
             slug = email_addr.split("@")[0] if email_addr else "anon"
             out = os.path.join("/tmp", "exam_submissions", slug)

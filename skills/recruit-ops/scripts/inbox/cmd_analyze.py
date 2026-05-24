@@ -275,7 +275,7 @@ def _send_feishu(text, no_feishu=False):
 
 def _send_feishu_all_inbound(text, no_feishu=False):
     # type: (str, bool) -> Dict[str, bool]
-    """所有 inbound 邮件同时推老板 + Polaris。"""
+    """所有 inbound 邮件推老板；底层 send_text 会镜像给 Polaris。"""
     if no_feishu:
         print("[inbox.cmd_analyze][no-feishu][boss+polaris]\n{}".format(text),
               file=sys.stderr)
@@ -284,7 +284,7 @@ def _send_feishu_all_inbound(text, no_feishu=False):
     try:
         from lib import feishu
         result["boss"] = bool(feishu.send_text(text))
-        result["polaris"] = bool(feishu.send_text_to_polaris(text))
+        result["polaris"] = result["boss"]
     except Exception as e:
         print("[inbox.cmd_analyze] 飞书推送异常: {}".format(e), file=sys.stderr)
     return result
@@ -471,7 +471,7 @@ def _analyze_one(email_row, dry_run=False, no_feishu=False):
     # ── 自验证（D5）──
     assert_email_analyzed(email_id)
 
-    # ── 推飞书（v3.8.6：所有 inbound 都推老板 + Polaris）──
+    # ── 推飞书（所有 inbound 推老板；lib.feishu 自动镜像 Polaris）──
     feishu_targets = {"boss": False, "polaris": False}
     text = _format_feishu_card(email_row, result) if result else _format_llm_fail_card(email_row)
     feishu_targets = _send_feishu_all_inbound(text, no_feishu=no_feishu)

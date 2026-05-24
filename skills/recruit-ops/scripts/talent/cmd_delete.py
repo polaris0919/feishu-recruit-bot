@@ -3,15 +3,16 @@
 
 【职责】
   1. 默认 dump 候选人完整快照 + 邮件 timeline 到 data/deleted_archive/<YYYY-MM>/
-  2. v3.5.8：把 data/candidates/<tid>/ 整个目录也归档进 deleted_archive/<YYYY-MM>/<tid>__dir/，
-     避免 cmd_delete 后 FS 残留空壳（孤儿目录）。
+  2. 把候选人当前正式资料目录归档进 deleted_archive/<YYYY-MM>/：
+     candidate_cv/<姓名>__<tid>/、exam_submissions/<姓名>__<tid>/、
+     candidates/<tid>/email/，并兜底归档历史 cv/exam_answer 残留。
   3. DELETE FROM talents（CASCADE 会删 talent_emails / talent_events）
   4. 写一条审计事件（在 talent_events 删除前）
   5. 自验证：assert_talent_deleted(talent_id)
 
 【绝对不做】
   - 不发拒信（要发 caller 自行调 outbound/cmd_send.py 的 rejection 模板）
-  - --no-backup 也不删 candidate_dir，只跳过 JSON 归档；FS 目录依旧搬走
+  - --no-backup 也不跳过文件目录归档，只跳过 JSON/timeline 归档
 
 【调用示例】
   PYTHONPATH=scripts python3 -m talent.cmd_delete --talent-id t_abc --reason "二面未通过"
@@ -25,9 +26,11 @@ import os
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
-from lib import recruit_paths, talent_db
+from lib import talent_db
+from lib.candidate_storage import data_root
 from lib.cli_wrapper import run_with_self_verify, UserInputError
 from lib.self_verify import assert_talent_deleted
 
@@ -44,7 +47,7 @@ def _archive_dir():
     if override:
         base = os.path.expanduser(override)
     else:
-        base = str(recruit_paths.workspace_path("data", "deleted_archive"))
+        base = str(data_root() / "deleted_archive")
     sub = datetime.now().strftime("%Y-%m")
     out = os.path.join(base, sub)
     os.makedirs(out, exist_ok=True)
@@ -69,32 +72,145 @@ def _write_archive(talent_id, snapshot, emails, reason, actor):
     return path
 
 
+def _is_under(path, parent):
+    # type: (Path, Path) -> bool
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _unique_archive_dst(base):
+    # type: (Path) -> Path
+    if not base.exists():
+        return base
+    for n in range(2, 1000):
+        candidate = base.with_name("{}__{}".format(base.name, n))
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("归档目标重名过多: {}".format(base))
+
+
+def _archive_path_if_exists(talent_id, src, label):
+    # type: (str, Path, str) -> Optional[str]
+    """把 data_root() 下的一个候选人资产目录搬进 deleted_archive。
+
+    源路径不存在时返回 None；源路径存在但移动失败时抛错，阻止后续 DB 删除。
+    """
+    if not src:
+        return None
+    src = Path(src).expanduser()
+    if not src.exists():
+        return None
+    root = data_root()
+    if not _is_under(src, root):
+        raise RuntimeError("拒绝归档 data_root 外路径: {}".format(src))
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    dst_name = "{}__{}__{}".format(talent_id, label, ts)
+    dst = _unique_archive_dst(Path(_archive_dir()) / dst_name)
+    try:
+        shutil.move(str(src), str(dst))
+        return str(dst)
+    except Exception as e:
+        raise RuntimeError(
+            "FS 归档失败 src={} dst={}: {}".format(src, dst, e))
+
+
+def _append_unique(paths, path):
+    # type: (list, Optional[Path]) -> None
+    if not path:
+        return
+    p = Path(path).expanduser()
+    try:
+        resolved = p.resolve()
+    except OSError:
+        resolved = p
+    for existing in paths:
+        try:
+            if Path(existing).resolve() == resolved:
+                return
+        except OSError:
+            if Path(existing) == p:
+                return
+    paths.append(p)
+
+
+def _snapshot_name(snapshot):
+    # type: (dict) -> Optional[str]
+    return (snapshot.get("candidate_name") or snapshot.get("name") or "").strip() or None
+
+
+def _archive_candidate_assets(talent_id, snapshot):
+    # type: (str, dict) -> list
+    """归档当前正式候选人文件目录，并兜底清理历史残留目录。"""
+    try:
+        from lib import candidate_storage as cs
+    except Exception as e:
+        print("[cmd_delete] 跳过 FS 归档（candidate_storage 不可用）: {}".format(e),
+              file=sys.stderr)
+        return []
+
+    candidate_name = _snapshot_name(snapshot)
+    cv_paths = []
+    exam_paths = []
+    email_paths = []
+    legacy_paths = []
+
+    cv_path = (snapshot.get("cv_path") or "").strip()
+    if cv_path:
+        cv_parent = Path(cv_path).expanduser().parent
+        if _is_under(cv_parent, cs.candidate_cv_root()):
+            _append_unique(cv_paths, cv_parent)
+    _append_unique(cv_paths, cs.cv_dir(talent_id, candidate_name))
+    if cs.candidate_cv_root().is_dir():
+        for p in cs.candidate_cv_root().glob("*__{}".format(talent_id)):
+            if p.is_dir():
+                _append_unique(cv_paths, p)
+
+    _append_unique(exam_paths, cs.exam_submission_dir(talent_id, candidate_name))
+    if cs.exam_submissions_dir().is_dir():
+        for p in cs.exam_submissions_dir().glob("*__{}".format(talent_id)):
+            if p.is_dir():
+                _append_unique(exam_paths, p)
+
+    _append_unique(email_paths, cs.email_dir(talent_id))
+    _append_unique(legacy_paths, cs.legacy_cv_dir(talent_id))
+    _append_unique(legacy_paths, cs.exam_answer_dir(talent_id))
+
+    archived = []
+    for label, paths in (
+        ("candidate_cv", cv_paths),
+        ("exam_submissions", exam_paths),
+        ("email", email_paths),
+        ("legacy", legacy_paths),
+    ):
+        for src in paths:
+            moved = _archive_path_if_exists(talent_id, src, label)
+            if moved:
+                archived.append(moved)
+
+    # 子目录都搬走后，若 candidates/<tid>/ 只剩空壳，移除它避免孤儿目录。
+    cdir = cs.candidate_dir(talent_id)
+    try:
+        if cdir.exists() and cdir.is_dir() and not any(cdir.iterdir()):
+            cdir.rmdir()
+    except OSError as e:
+        print("[cmd_delete] 空 candidate_dir 清理失败 {}: {}".format(cdir, e),
+              file=sys.stderr)
+    return archived
+
+
 def _archive_candidate_dir(talent_id):
     # type: (str) -> Optional[str]
-    """v3.5.8：把 data/candidates/<tid>/ 整个搬到 deleted_archive/<YYYY-MM>/<tid>__dir_<ts>/。
-
-    返回归档后的目标路径；如果源目录不存在或 candidate_storage 模块不可用则返回 None
-    （兼容旧候选人未走 v3.5.8 的情况）。失败 warn-continue 不抛。
-    """
+    """旧接口兼容：归档 candidates/<tid>/ 整个目录。新主流程不用它。"""
     try:
         from lib.candidate_storage import candidate_dir
     except Exception as e:
         print("[cmd_delete] 跳过 FS 归档（candidate_storage 不可用）: {}".format(e),
               file=sys.stderr)
         return None
-    src = candidate_dir(talent_id)
-    if not src.exists():
-        return None
-    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-    dst_name = "{}__dir_{}".format(talent_id, ts)
-    dst = os.path.join(_archive_dir(), dst_name)
-    try:
-        shutil.move(str(src), dst)
-        return dst
-    except OSError as e:
-        print("[cmd_delete] FS 归档失败 src={} dst={}: {}".format(src, dst, e),
-              file=sys.stderr)
-        return None
+    return _archive_path_if_exists(talent_id, candidate_dir(talent_id), "candidate_dir")
 
 
 # ─── 主流程 ──────────────────────────────────────────────────────────────────
@@ -167,6 +283,7 @@ def _do_delete(args):
 
     archive_path = None
     dir_archive_path = None
+    asset_archive_paths = []
     if args.dry_run:
         print("[cmd_delete] DRY-RUN talent={} reason={}".format(talent_id, args.reason),
               file=sys.stderr)
@@ -183,8 +300,9 @@ def _do_delete(args):
         except Exception as e:
             print("[cmd_delete] alias 移除异常: {}".format(e), file=sys.stderr)
 
-        # v3.5.8：把候选人 FS 目录也搬走（warn-continue：失败只 stderr，不挡删 DB）
-        dir_archive_path = _archive_candidate_dir(talent_id)
+        # 删除 DB 前先搬走当前正式资料目录。若已有文件目录归档失败，直接中止删库。
+        asset_archive_paths = _archive_candidate_assets(talent_id, snapshot)
+        dir_archive_path = asset_archive_paths[0] if asset_archive_paths else None
 
         # 在 DELETE 之前写审计；CASCADE 会把这条事件也删掉，所以这里只是为了
         # 让 _push_alert / 其他订阅者有机会看到 stage.deleted 事件
@@ -192,6 +310,7 @@ def _do_delete(args):
             talent_id, "talent.deleted",
             payload={"reason": args.reason, "archive_path": archive_path,
                      "dir_archive_path": dir_archive_path,
+                     "asset_archive_paths": asset_archive_paths,
                      "emails_count": len(emails)},
             actor=args.actor,
         )
@@ -212,14 +331,15 @@ def _do_delete(args):
         "actor": args.actor,
         "archive_path": archive_path,
         "dir_archive_path": dir_archive_path,
+        "asset_archive_paths": asset_archive_paths,
         "emails_archived": len(emails),
         "dry_run": bool(args.dry_run),
     }
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
-        print("[cmd_delete] OK talent={} archive={} dir_archive={} emails_archived={}".format(
-            talent_id, archive_path, dir_archive_path, len(emails)))
+        print("[cmd_delete] OK talent={} archive={} assets={} emails_archived={}".format(
+            talent_id, archive_path, len(asset_archive_paths), len(emails)))
     return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SMTP 投递 watcher：包一层 email_send.py，等子进程结束后根据 returncode 决定是否告警。
+"""SMTP 投递 watcher：后台发送邮件，失败时回告警。
 
 设计目的（04-22 加固）：
   历史教训 —— send_bg_email 只 spawn 后台进程就立刻返回 PID，主流程乐观地把
@@ -7,54 +7,49 @@
   拒收 / 鉴权错误 / 超时），没有任何人会被告知，只能事后翻 /tmp/email_*.log。
 
   本 watcher 自己被 send_bg_email 后台拉起，不阻塞主流程。它做三件事：
-    1. 同步等 email_send.py 真正退出
+    1. 同步投递 SMTP
     2. 失败时：发飞书消息给老板（含 to/subject/exit_code/log 路径）
     3. 失败时：如果带了 talent_id，在 talent_events 写一条 email_smtp_failed
 
-  成功时只在 /tmp/email_bg.log 追加一行，不发飞书（避免噪音）。
+  成功时只在私有 runtime log 追加一行，不发飞书（避免噪音）。
 
 CLI：
   python3 -m lib.email_watch \\
-    --to a@b.com --subject "..." --body "..." --tag round1_invite \\
+    --to a@b.com --subject "..." --body-file /path/body.txt --tag round1_invite \\
     [--talent-id t_xxx] [--candidate-name 张三] [--attachment /path/...] [--attachment ...]
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 from typing import List, Optional
 
-from lib.recruit_paths import workspace_path
-
-_EMAIL_SEND_SCRIPT_CANDIDATES = [
-    str(workspace_path("skills", "email-send", "scripts", "email_send.py")),
-    os.path.expanduser("~/.hermes/skills/openclaw-imports/email-send/scripts/email_send.py"),
-]
-
-_FAILURE_LOG = "/tmp/email_delivery_failures.log"
-_BG_LOG = "/tmp/email_bg.log"
-
-
-def _resolve_email_send_script():
-    # type: () -> str
-    for path in _EMAIL_SEND_SCRIPT_CANDIDATES:
-        if os.path.isfile(path):
-            return path
-    return _EMAIL_SEND_SCRIPT_CANDIDATES[-1]
+from lib.private_logs import append_private_log, private_log_path, write_private_text
 
 
 def _ts():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _append_log(path, line):
-    # type: (str, str) -> None
-    try:
-        with open(path, "a") as f:
-            f.write(line if line.endswith("\n") else line + "\n")
-    except Exception as e:
-        print("[email_watch] 写日志 {} 失败: {}".format(path, e), file=sys.stderr)
+def _read_body(args):
+    # type: (argparse.Namespace) -> str
+    if args.body_file:
+        with open(args.body_file, "r", encoding="utf-8") as f:
+            return f.read()
+    return args.body or ""
+
+
+def _deliver_email(args, body):
+    # type: (argparse.Namespace, str) -> str
+    from lib import smtp_sender
+    return smtp_sender.send_email_with_threading(
+        to_email=args.to,
+        subject=args.subject,
+        body=body,
+        from_name=None,
+        normalize_subject=False,
+        attachments=args.attachment or None,
+    )
 
 
 def _notify_boss_failure(to, subject, tag, talent_id, candidate_name, exit_code, log_path, stderr_tail):
@@ -145,6 +140,7 @@ def parse_args(argv=None):
     p.add_argument("--to", required=True)
     p.add_argument("--subject", default="")
     p.add_argument("--body", default="")
+    p.add_argument("--body-file", default="", help="邮件正文文件；优先于 --body")
     p.add_argument("--tag", default="email")
     p.add_argument("--talent-id", default="")
     p.add_argument("--candidate-name", default="")
@@ -157,30 +153,25 @@ def main(argv=None):
     # type: (Optional[List[str]]) -> int
     args = parse_args(argv)
 
-    log_path = args.log_path or "/tmp/email_{}_{}_{}.log".format(
-        args.tag, args.to.replace("@", "_"), int(time.time()))
-
-    cmd = ["python3", _resolve_email_send_script(),
-           "--to", args.to, "--subject", args.subject, "--body", args.body]
-    for att in args.attachment:
-        if att:
-            cmd += ["--attachment", att]
-
-    with open(log_path, "w") as fp:
-        proc = subprocess.run(cmd, stdout=fp, stderr=subprocess.STDOUT)
-
-    rc = proc.returncode
-    if rc == 0:
-        _append_log(_BG_LOG, "[{}] {} to={} OK log={}".format(
-            _ts(), args.tag, args.to, log_path))
+    log_path = args.log_path or str(private_log_path("email_{}".format(args.tag)))
+    try:
+        body = _read_body(args)
+        message_id = _deliver_email(args, body)
+        write_private_text(log_path, "delivered message_id={}\n".format(message_id))
+    except Exception as e:
+        rc = 1
+        write_private_text(log_path, "{}: {}\n".format(type(e).__name__, e))
+    else:
+        append_private_log("email_bg.log", "[{}] {} OK log={}".format(
+            _ts(), args.tag, log_path))
         _record_success_event(args.talent_id, args.to, args.subject, args.tag)
         return 0
 
     tail = _read_tail(log_path)
-    _append_log(_FAILURE_LOG, "[{}] {} to={} rc={} talent={} log={}\n----\n{}\n".format(
-        _ts(), args.tag, args.to, rc, args.talent_id or "-", log_path, tail))
-    _append_log(_BG_LOG, "[{}] {} to={} FAILED rc={} log={}".format(
-        _ts(), args.tag, args.to, rc, log_path))
+    append_private_log("email_delivery_failures.log", "[{}] {} rc={} talent={} log={}\n----\n{}\n".format(
+        _ts(), args.tag, rc, args.talent_id or "-", log_path, tail))
+    append_private_log("email_bg.log", "[{}] {} FAILED rc={} log={}".format(
+        _ts(), args.tag, rc, log_path))
     _notify_boss_failure(args.to, args.subject, args.tag,
                          args.talent_id, args.candidate_name, rc, log_path, tail)
     _record_failure_event(args.talent_id, args.to, args.subject, args.tag, rc, log_path)

@@ -3,11 +3,11 @@
 
 【覆盖】
   1. 路径计算：candidate_dir / cv_dir / exam_answer_dir / email_dir
-  2. attachment_dir 路由：context='exam' → exam_answer/，其他 → email/
+  2. attachment_dir 路由：context='exam' → exam_submissions/，其他 → email/
   3. ensure_candidate_dirs：幂等 / 失败兜成 error 字段（不抛）/ dry-run 不动盘
   4. import_cv：move / copy / 重名加 (2) / 已在目标目录 no-op / 幂等同文件
   5. _validate_talent_id：拒空 / 路径分隔符 / .开头
-  6. RECRUIT_DATA_ROOT env 隔离：测试不污染 <RECRUIT_WORKSPACE>/data
+  6. RECRUIT_DATA_ROOT env 隔离：测试不污染真实资料根
 """
 from __future__ import annotations
 
@@ -56,29 +56,42 @@ class TestPathCalc(unittest.TestCase):
         self.assertEqual(cs.candidate_dir("t_abc"),
                          Path(_TMP_ROOT) / "candidates" / "t_abc")
 
-    def test_three_subdirs(self):
-        for sub in ("cv", "exam_answer", "email"):
-            getter = getattr(cs, "{}_dir".format(sub) if sub != "cv" else "cv_dir")
+    def test_cv_dir_uses_candidate_cv_root(self):
+        self.assertEqual(cs.candidate_cv_root(),
+                         Path(_TMP_ROOT) / "candidate_cv")
+        self.assertEqual(cs.cv_dir("t_abc", "张三"),
+                         Path(_TMP_ROOT) / "candidate_cv" / "张三__t_abc")
+        self.assertEqual(cs.cv_dir("t_abc"),
+                         Path(_TMP_ROOT) / "candidate_cv" / "未命名__t_abc")
+
+    def test_two_candidate_subdirs(self):
+        for sub in ("exam_answer", "email"):
+            getter = getattr(cs, "{}_dir".format(sub))
             self.assertEqual(getter("t_abc"),
                              cs.candidate_dir("t_abc") / sub)
 
+    def test_shared_exam_dirs(self):
+        self.assertEqual(cs.exam_submissions_dir(),
+                         Path(_TMP_ROOT) / "exam_submissions")
+        self.assertEqual(cs.exam_package_dir(),
+                         Path(_TMP_ROOT) / "exam_package")
+
     def test_list_known_subdirs(self):
-        self.assertEqual(cs.list_known_subdirs(), ["cv", "exam_answer", "email"])
+        self.assertEqual(cs.list_known_subdirs(), ["exam_answer", "email"])
 
 
 class TestAttachmentDirRouting(unittest.TestCase):
     """email_attachments.extract_and_save 的核心：context 决定走哪个子树。"""
 
-    def test_exam_context_routes_to_exam_answer(self):
+    def test_exam_context_routes_to_grouped_exam_submissions(self):
         p = cs.attachment_dir("t_abc", context="exam", email_id="em_xyz")
-        self.assertEqual(p,
-                         cs.exam_answer_dir("t_abc") / "em_em_xyz")
+        self.assertEqual(p, cs.exam_submissions_dir())
 
     def test_exam_context_case_insensitive(self):
         # context 大小写 / 前后空格不应影响路由（HR / OpenClaw 偶尔写 'EXAM'）
         for ctx in ("EXAM", " exam ", "Exam"):
             p = cs.attachment_dir("t_abc", context=ctx, email_id="em_y")
-            self.assertEqual(p, cs.exam_answer_dir("t_abc") / "em_em_y")
+            self.assertEqual(p, cs.exam_submissions_dir())
 
     def test_non_exam_context_routes_to_email(self):
         for ctx in ("intake", "followup", "round1", "post_offer", None, "", "  "):
@@ -103,15 +116,15 @@ class TestEnsureCandidateDirs(unittest.TestCase):
         if cdir.exists():
             shutil.rmtree(cdir, ignore_errors=True)
 
-    def test_first_call_creates_all_three(self):
+    def test_first_call_creates_all_two(self):
         result = cs.ensure_candidate_dirs(self.tid)
         self.assertIsNone(result["error"])
         self.assertFalse(result["dry_run"])
         self.assertEqual(sorted(result["created"]),
-                         ["cv", "email", "exam_answer"])
+                         ["email", "exam_answer"])
         self.assertEqual(result["already_existed"], [])
         # 实际目录就位
-        for sub in ("cv", "exam_answer", "email"):
+        for sub in ("exam_answer", "email"):
             self.assertTrue((cs.candidate_dir(self.tid) / sub).is_dir())
 
     def test_idempotent_second_call_no_op(self):
@@ -120,15 +133,15 @@ class TestEnsureCandidateDirs(unittest.TestCase):
         self.assertIsNone(result["error"])
         self.assertEqual(result["created"], [])
         self.assertEqual(sorted(result["already_existed"]),
-                         ["cv", "email", "exam_answer"])
+                         ["email", "exam_answer"])
 
     def test_partial_existing_only_creates_missing(self):
-        """先建 cv/，再调 ensure → 应只新建 exam_answer / email。"""
-        (cs.candidate_dir(self.tid) / "cv").mkdir(parents=True, mode=0o700)
+        """先建 exam_answer/，再调 ensure → 应只新建 email。"""
+        (cs.candidate_dir(self.tid) / "exam_answer").mkdir(parents=True, mode=0o700)
         result = cs.ensure_candidate_dirs(self.tid)
         self.assertIsNone(result["error"])
-        self.assertEqual(sorted(result["created"]), ["email", "exam_answer"])
-        self.assertEqual(result["already_existed"], ["cv"])
+        self.assertEqual(result["created"], ["email"])
+        self.assertEqual(result["already_existed"], ["exam_answer"])
 
     def test_dir_mode_0700(self):
         cs.ensure_candidate_dirs(self.tid)
@@ -165,10 +178,15 @@ class TestImportCv(unittest.TestCase):
 
     def setUp(self):
         self.tid = "t_cv_{}".format(self._testMethodName[-12:])
+        self.candidate_name = "张三"
         # 清掉残留
         cdir = cs.candidate_dir(self.tid)
         if cdir.exists():
             shutil.rmtree(cdir, ignore_errors=True)
+        cv_root = cs.candidate_cv_root()
+        if cv_root.exists():
+            for p in cv_root.glob("*__{}".format(self.tid)):
+                shutil.rmtree(p, ignore_errors=True)
         # 准备一个 src 目录（不在 candidates 下，模拟 OpenClaw inbound）
         self.src_dir = Path(tempfile.mkdtemp(prefix="cv_src_"))
         self.src = self.src_dir / "张三-CV.pdf"
@@ -179,36 +197,46 @@ class TestImportCv(unittest.TestCase):
         cdir = cs.candidate_dir(self.tid)
         if cdir.exists():
             shutil.rmtree(cdir, ignore_errors=True)
+        cv_root = cs.candidate_cv_root()
+        if cv_root.exists():
+            for p in cv_root.glob("*__{}".format(self.tid)):
+                shutil.rmtree(p, ignore_errors=True)
 
     def test_move_relocates_file_and_removes_src(self):
-        new_path = cs.import_cv(self.tid, str(self.src), mode="move")
+        new_path = cs.import_cv(
+            self.tid, str(self.src), mode="move", candidate_name=self.candidate_name)
         self.assertTrue(new_path.is_file())
-        self.assertEqual(new_path.parent, cs.cv_dir(self.tid))
+        self.assertEqual(new_path.parent, cs.cv_dir(self.tid, self.candidate_name))
         self.assertFalse(self.src.exists(), "move 模式应删除原文件")
         # 文件权限应被收紧到 0600
         mode = new_path.stat().st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
     def test_copy_keeps_src(self):
-        new_path = cs.import_cv(self.tid, str(self.src), mode="copy")
+        new_path = cs.import_cv(
+            self.tid, str(self.src), mode="copy", candidate_name=self.candidate_name)
         self.assertTrue(new_path.is_file())
         self.assertTrue(self.src.exists(), "copy 模式应保留原文件")
 
     def test_already_in_target_dir_is_noop(self):
         """src 已经在 cv_dir 下 → 直接返回 src，不动文件。"""
         cs.ensure_candidate_dirs(self.tid)
-        in_place = cs.cv_dir(self.tid) / "in_place.pdf"
+        cs.cv_dir(self.tid, self.candidate_name).mkdir(parents=True, exist_ok=True)
+        in_place = cs.cv_dir(self.tid, self.candidate_name) / "in_place.pdf"
         in_place.write_bytes(b"already here")
-        result = cs.import_cv(self.tid, str(in_place), mode="move")
+        result = cs.import_cv(
+            self.tid, str(in_place), mode="move", candidate_name=self.candidate_name)
         self.assertEqual(result, in_place)
         self.assertTrue(in_place.exists())
 
     def test_collision_appends_suffix(self):
         """目标目录已有同名 + 内容不同 → 自动加 (2) 后缀。"""
         cs.ensure_candidate_dirs(self.tid)
-        existing = cs.cv_dir(self.tid) / self.src.name
+        cs.cv_dir(self.tid, self.candidate_name).mkdir(parents=True, exist_ok=True)
+        existing = cs.cv_dir(self.tid, self.candidate_name) / self.src.name
         existing.write_bytes(b"different content")
-        new_path = cs.import_cv(self.tid, str(self.src), mode="move")
+        new_path = cs.import_cv(
+            self.tid, str(self.src), mode="move", candidate_name=self.candidate_name)
         self.assertNotEqual(new_path, existing)
         self.assertIn("(2)", new_path.name)
         self.assertTrue(existing.exists())  # 老文件没被覆盖
@@ -217,13 +245,15 @@ class TestImportCv(unittest.TestCase):
         """如果目标目录已有同名 + 同 size + 同 mtime → 视为重复跑，不动。"""
         cs.ensure_candidate_dirs(self.tid)
         # 先 import 一次
-        first = cs.import_cv(self.tid, str(self.src), mode="copy")
+        first = cs.import_cv(
+            self.tid, str(self.src), mode="copy", candidate_name=self.candidate_name)
         # 再 import 一次同文件
-        second = cs.import_cv(self.tid, str(self.src), mode="copy")
-        # 第二次应走幂等路径，返回 src（caller 当 no-op）
-        self.assertEqual(second, Path(str(self.src)).expanduser().resolve())
+        second = cs.import_cv(
+            self.tid, str(self.src), mode="copy", candidate_name=self.candidate_name)
+        # 第二次应走幂等路径，仍返回归档目录中的规范路径。
+        self.assertEqual(second, first)
         # cv 目录里应该还是只有一个文件，没有 (2)
-        cv_files = list(cs.cv_dir(self.tid).glob("*.pdf"))
+        cv_files = list(cs.cv_dir(self.tid, self.candidate_name).glob("*.pdf"))
         self.assertEqual(len(cv_files), 1)
         self.assertEqual(cv_files[0], first)
 
@@ -238,11 +268,12 @@ class TestImportCv(unittest.TestCase):
     def test_dry_run_returns_target_path_without_writing(self):
         os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
         try:
-            new_path = cs.import_cv(self.tid, str(self.src), mode="move")
+            new_path = cs.import_cv(
+                self.tid, str(self.src), mode="move", candidate_name=self.candidate_name)
         finally:
             os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
         # 路径算对，但盘上啥都没动
-        self.assertEqual(new_path, cs.cv_dir(self.tid) / self.src.name)
+        self.assertEqual(new_path, cs.cv_dir(self.tid, self.candidate_name) / self.src.name)
         self.assertTrue(self.src.exists())  # 没被搬走
         self.assertFalse(new_path.exists())  # 也没创建
 
@@ -251,7 +282,8 @@ class TestImportCv(unittest.TestCase):
         # 模拟飞书拖进来的源文件
         src = self.src_dir / "doc_bfcbf2a1a335_车光明CV.pdf"
         src.write_bytes(b"%PDF-1.4 feishu attachment")
-        new_path = cs.import_cv(self.tid, str(src), mode="move")
+        new_path = cs.import_cv(
+            self.tid, str(src), mode="move", candidate_name=self.candidate_name)
         # 目标文件名应不带 doc_ 前缀
         self.assertEqual(new_path.name, "车光明CV.pdf")
         self.assertTrue(new_path.is_file())
@@ -265,12 +297,14 @@ class TestImportCv(unittest.TestCase):
             src.write_bytes(b"x")
             tid_local = "t_keep_{}".format(abs(hash(name)) % 10000)
             try:
-                new_path = cs.import_cv(tid_local, str(src), mode="copy")
+                new_path = cs.import_cv(tid_local, str(src), mode="copy", candidate_name="张三")
                 self.assertEqual(new_path.name, name,
                                  "{!r} 不应被改名".format(name))
             finally:
                 src.unlink(missing_ok=True)
                 shutil.rmtree(cs.candidate_dir(tid_local), ignore_errors=True)
+                for p in cs.candidate_cv_root().glob("*__{}".format(tid_local)):
+                    shutil.rmtree(p, ignore_errors=True)
 
     def test_dry_run_with_feishu_prefix_returns_clean_target(self):
         """dry-run 也应把目标路径展示为剥掉前缀后的样子，便于 chain echo。"""
@@ -278,7 +312,8 @@ class TestImportCv(unittest.TestCase):
         src.write_bytes(b"y")
         os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"
         try:
-            new_path = cs.import_cv(self.tid, str(src), mode="copy")
+            new_path = cs.import_cv(
+                self.tid, str(src), mode="copy", candidate_name=self.candidate_name)
         finally:
             os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
         self.assertEqual(new_path.name, "X.pdf")

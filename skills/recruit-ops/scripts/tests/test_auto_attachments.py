@@ -26,10 +26,10 @@ from pathlib import Path
 from unittest import mock
 
 from email_templates import auto_attachments as aa
-from lib.recruit_paths import workspace_path
+from lib.candidate_storage import data_root
 
 
-REAL_DATA_ROOT = workspace_path("data")
+REAL_DATA_ROOT = data_root()
 
 
 class TestAutoAttachmentsRegistry(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestAutoAttachmentsRegistry(unittest.TestCase):
         self.assertEqual(aa.auto_attachments_for("nonexistent_template"), [])
 
     def test_onboarding_offer_real_files_exist(self):
-        """v3.5.10 上线必备：合同 + 登记表 docx 真的躺在 data/onoffer_data/。
+        """v3.5.10 上线必备：合同 + 登记表 docx 真的躺在 data_root/onoffer_data/。
         任何人删 / 改名这两个文件都会让该测试红，强制走 PR review。"""
         for rel in [
             "onoffer_data/致邃实习协议-2026年4月版.docx",

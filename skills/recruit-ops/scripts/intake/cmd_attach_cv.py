@@ -23,9 +23,9 @@ _SAFE_FIELDS = {
 }
 
 
-def _import_cv_to_candidate_dir(talent_id, src_cv_path):
-    # type: (str, str) -> str
-    """v3.5.8：把 OpenClaw 缓冲区 / 任意路径下的 CV 搬进 candidates/<tid>/cv/。
+def _import_cv_to_candidate_dir(talent_id, src_cv_path, candidate_name=None):
+    # type: (str, str, str) -> str
+    """把 OpenClaw 缓冲区 / 任意路径下的 CV 搬进 candidate_cv/<姓名>__<tid>/。
 
     返回新路径（已落到 candidate dir 下的绝对路径）。
     src 已经在 candidate dir 下时 no-op，原路返回。
@@ -37,7 +37,7 @@ def _import_cv_to_candidate_dir(talent_id, src_cv_path):
     mode = (os.environ.get("RECRUIT_CV_IMPORT_MODE") or "move").strip().lower()
     if mode not in ("move", "copy"):
         mode = "move"
-    new_path = _cs.import_cv(talent_id, src_cv_path, mode=mode)
+    new_path = _cs.import_cv(talent_id, src_cv_path, mode=mode, candidate_name=candidate_name)
     return str(new_path)
 
 
@@ -45,7 +45,7 @@ def _apply_update(talent_id, cv_path, field_updates):
     # type: (str, str, dict) -> str
     """仅更新 cv_path 及白名单内的字段，其他流程字段保持不变。
 
-    v3.5.8：cv_path 不为空时，先把文件搬进 candidates/<tid>/cv/，再把
+    cv_path 不为空时，先把文件搬进 candidate_cv/<姓名>__<tid>/，再把
     入库的 cv_path 改为新路径。返回最终入库的 cv_path（caller 用它做 echo）。
     """
     from lib.core_state import load_candidate, save_candidate
@@ -54,7 +54,8 @@ def _apply_update(talent_id, cv_path, field_updates):
         raise RuntimeError("未找到候选人: {}".format(talent_id))
     final_cv_path = cv_path
     if cv_path:
-        final_cv_path = _import_cv_to_candidate_dir(talent_id, cv_path)
+        candidate_name = cand.get("name") or cand.get("candidate_name")
+        final_cv_path = _import_cv_to_candidate_dir(talent_id, cv_path, candidate_name)
         cand["cv_path"] = final_cv_path
     for k, v in field_updates.items():
         if k in _SAFE_FIELDS:
@@ -118,7 +119,7 @@ def main(argv=None):
 
     parts = ["已更新候选人 {} 的简历文件。".format(args.talent_id)]
     if args.cv_path:
-        # v3.5.8：echo 落定后的绝对路径（已搬进 candidates/<tid>/cv/），
+        # echo 落定后的绝对路径（已搬进 candidate_cv/<姓名>__<tid>/），
         # 老板审计 / agent 后续引用都用这个新路径
         parts.append("cv_path: {}".format(final_cv_path))
         if final_cv_path != args.cv_path.strip():

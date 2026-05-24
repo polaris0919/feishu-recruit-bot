@@ -9,6 +9,8 @@ __pycache__/
 .eggs/
 dist/
 build/
+.venv/
+**/.venv/
 
 # Editor / OS noise
 **/sfully*
@@ -58,3 +60,8 @@ data/followup_pending/
 data/standard_answer/
 data/deleted_archive/
 data/onoffer_data/
+
+# Test / coverage artifacts
+.coverage
+coverage.xml
+htmlcov/

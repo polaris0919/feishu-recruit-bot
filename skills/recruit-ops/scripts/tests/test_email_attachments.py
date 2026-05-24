@@ -106,7 +106,7 @@ class TestExtractMetadata(unittest.TestCase):
 
 
 class TestExtractAndSave(unittest.TestCase):
-    """v3.5.8：落盘路径走 lib.candidate_storage，按 context 分流。"""
+    """落盘路径走 lib.candidate_storage，按 context 分流。"""
 
     def setUp(self):
         # 用 RECRUIT_DATA_ROOT 隔离测试，不再 monkey-patch 模块级常量
@@ -151,17 +151,23 @@ class TestExtractAndSave(unittest.TestCase):
         parent_st = os.stat(os.path.dirname(full))
         self.assertEqual(parent_st.st_mode & 0o777, 0o700)
 
-    def test_exam_context_routes_to_exam_answer(self):
-        """笔试附件应落到 exam_answer/，不再混进通用 email/。"""
+    def test_exam_context_routes_to_grouped_exam_submissions(self):
+        """笔试附件应按候选人落到 exam_submissions/，不再混进系统多级目录。"""
         msg = _build_msg_with_attachments([
             ("笔试题答案.zip", "application/zip", b"PKzipfake", "attachment"),
         ])
         meta = email_attachments.extract_and_save(
-            msg, talent_id="t_exam", email_id="eid-exam-1", context="exam")
+            msg,
+            talent_id="t_exam",
+            email_id="eid-exam-1",
+            context="exam",
+            candidate_name="张三",
+            sent_at="2026-05-21 12:00:00",
+        )
         self.assertTrue(meta[0]["saved"])
         self.assertEqual(
             meta[0]["path"],
-            "candidates/t_exam/exam_answer/em_eid-exam-1/笔试题答案.zip")
+            "exam_submissions/张三__t_exam/2026-05-21__em_eid-exam-1__笔试题答案.zip")
         full = os.path.join(self.tmp_root, meta[0]["path"])
         self.assertTrue(os.path.isfile(full))
 
@@ -247,10 +253,9 @@ class TestExtractAndSave(unittest.TestCase):
         # path 字段还要算对，方便 echo / 审计
         self.assertEqual(
             meta[0]["path"],
-            "candidates/t_dry/exam_answer/em_eid-dry-1/简历.pdf")
+            "exam_submissions/未命名__t_dry/unknown-date__em_eid-dry-1__简历.pdf")
         # 关键：不能创建任何目录
-        target_dir = os.path.join(
-            self.tmp_root, "candidates", "t_dry", "exam_answer")
+        target_dir = os.path.join(self.tmp_root, "exam_submissions")
         self.assertFalse(
             os.path.exists(target_dir),
             "dry-run 不能在磁盘上留任何 trace, but {} exists".format(target_dir))

@@ -68,12 +68,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from lib import recruit_paths
+from lib.candidate_storage import data_root
 
 _LOCK_PATH = Path(os.path.expanduser(
     os.environ.get("RECRUIT_CRON_LOCK_PATH", "/tmp/recruit-cron-runner.lock")
 ))
-_HEARTBEAT_PATH = recruit_paths.workspace_path("data", ".cron_heartbeat")
+_HEARTBEAT_PATH = data_root() / ".cron_heartbeat"
 _TASK_TIMEOUT_SEC = 300  # 单个子任务上限
 
 

@@ -3,7 +3,7 @@
 手动 AI 笔试评审命令。
 
 典型用法（推荐分两步：先终端预览，再推飞书+写审计；评审结果会自动缓存复用，不重复扣 LLM 费）：
-    # 步骤 1：终端预览（首次会调一次 LLM，结果缓存到 cache_dir/<talent_id>/_ai_review_result.json）
+    # 步骤 1：终端预览（首次会调一次 LLM，结果缓存到 exam_submissions/<姓名>__<talent_id>/_ai_review_result.json）
     python3 exam/cmd_exam_ai_review.py --talent-id t_xxx
 
     # 步骤 2：你看完报告觉得 OK → 推飞书 + 写 talent_events 审计（自动复用缓存，不再调 LLM）
@@ -264,8 +264,8 @@ def parse_args(argv=None):
     p.add_argument("--rubric", default=DEFAULT_RUBRIC_PATH, help="rubric.json 路径（默认: {}）".format(DEFAULT_RUBRIC_PATH))
 
     g = p.add_argument_group("IMAP 自动拉取（默认行为）")
-    g.add_argument("--cache-dir", default="/tmp/exam_submissions",
-                   help="IMAP 拉取的本地缓存根目录（默认 /tmp/exam_submissions/<talent_id>）")
+    g.add_argument("--cache-dir", default="",
+                   help="IMAP 拉取的本地缓存根目录；默认写入 recruit-files/exam_submissions/<姓名>__<talent_id>")
     g.add_argument("--refetch", action="store_true", help="强制重新从 IMAP 拉取（清掉缓存目录）")
     g.add_argument("--no-fetch", action="store_true", help="不去 IMAP 拉，仅用 --code-dir 给的本地目录")
     g.add_argument("--max-msgs", type=int, default=3, help="IMAP 最多拉最近 N 封匹配邮件（默认 3）")
@@ -323,7 +323,7 @@ def _ensure_local_submission(args, meta):
     """
     根据 args 决定提交目录：
       - 优先使用 --code-dir
-      - 否则用 cache_dir/<talent_id>，必要时自动调 IMAP 拉
+      - 否则用 recruit-files/exam_submissions/<姓名>__<talent_id>，必要时自动调 IMAP 拉
     返回最终的本地目录路径（或 None 表示无可用目录）。
     """
     if args.code_dir:
@@ -339,7 +339,12 @@ def _ensure_local_submission(args, meta):
         # 没 talent_id 又没 code_dir，无法 IMAP 拉，让上层报错
         return None
 
-    target_dir = os.path.join(args.cache_dir, args.talent_id)
+    if args.cache_dir:
+        target_dir = os.path.join(args.cache_dir, args.talent_id)
+    else:
+        from lib.candidate_storage import exam_submission_dir
+        target_dir = str(exam_submission_dir(
+            args.talent_id, meta.get("candidate_name") or None))
     has_existing = os.path.isdir(target_dir) and any(os.scandir(target_dir))
 
     if args.refetch and os.path.isdir(target_dir):
@@ -470,7 +475,7 @@ def _build_candidate(args):
 def _review_cache_path(args):
     # type: (argparse.Namespace) -> Optional[str]
     """评审结果缓存路径：talent_id 优先，否则 fallback 到 code_dir，再否则不缓存。"""
-    if args.talent_id:
+    if args.talent_id and args.cache_dir:
         return os.path.join(args.cache_dir, args.talent_id, "_ai_review_result.json")
     if args.code_dir and os.path.isdir(args.code_dir):
         return os.path.join(args.code_dir, "_ai_review_result.json")

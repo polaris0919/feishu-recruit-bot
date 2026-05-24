@@ -114,7 +114,7 @@ class TestRound1Result(unittest.TestCase):
         bogus_inputs = [
             "笔试邀请邮件内容",  # 中文字面量 — 闵思涵案的真实输入
             "exam invite body",  # 英文 placeholder
-            "邮件正文 张三 embedded@example.com",  # 嵌入合法邮箱但仍非法
+            "邮件正文 张三 sihanmin@163.com",  # 嵌入合法邮箱但仍非法
             "no-at-sign.example.com",  # 没有 @
             "user@",  # 没有 domain
         ]

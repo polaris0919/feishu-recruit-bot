@@ -326,7 +326,7 @@ v3.5.11 当时做了**两件事**：
 **触发现象**：agent 看到候选人提交笔试后，会跑 `exam.fetch_exam_submission` 想"重拉一次确保完整"，但 `inbox.cmd_scan` 已经在每次扫到候选人新邮件时自动落盘附件了，重拉只会撞 IMAP 配额并制造副本。
 **现行规则**：
 
-- 候选人附件由 `inbox.cmd_scan` 自动落盘到 `data/candidates/<tid>/{exam_answer|email}/em_<eid>/`；
+- 候选人笔试附件由 `inbox.cmd_scan` 自动落盘到 `data/exam_submissions/<姓名>__<tid>/`，普通邮件附件仍落到 `data/candidates/<tid>/email/em_<eid>/`；
 - 元数据写在 `talent_emails.attachments` JSONB；
 - agent **不要**调 `exam.fetch_exam_submission` 重拉。
 
