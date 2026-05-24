@@ -56,13 +56,17 @@ class TestAutoAttachmentsRegistry(unittest.TestCase):
     def test_missing_file_raises_runtime_error(self):
         """注册了但文件没了 → fail-fast，不能静默发漏附件。"""
         with tempfile.TemporaryDirectory(prefix="aa_test_") as tmp:
+            prev_root = os.environ.get("RECRUIT_DATA_ROOT")
             os.environ["RECRUIT_DATA_ROOT"] = tmp
             try:
                 with self.assertRaises(RuntimeError) as ctx:
                     aa.auto_attachments_for("onboarding_offer")
                 self.assertIn("默认附件文件缺失", str(ctx.exception))
             finally:
-                os.environ.pop("RECRUIT_DATA_ROOT", None)
+                if prev_root is None:
+                    os.environ.pop("RECRUIT_DATA_ROOT", None)
+                else:
+                    os.environ["RECRUIT_DATA_ROOT"] = prev_root
 
     def test_returns_absolute_paths(self):
         # 真实仓库下应该返回 2 个绝对路径
@@ -185,6 +189,7 @@ class TestCmdSendAutoAttach(unittest.TestCase):
     def test_onboarding_offer_fails_when_default_attachment_missing(self):
         """合同被人挪走 → cmd_send 应 fail-fast 拒绝发送。"""
         with tempfile.TemporaryDirectory(prefix="aa_send_") as tmp:
+            prev_root = os.environ.get("RECRUIT_DATA_ROOT")
             os.environ["RECRUIT_DATA_ROOT"] = tmp
             try:
                 rc, out, err = self._run([
@@ -197,7 +202,10 @@ class TestCmdSendAutoAttach(unittest.TestCase):
                                     "应 fail-fast：默认附件缺失不能继续")
                 self.assertIn("默认附件文件缺失", err)
             finally:
-                os.environ.pop("RECRUIT_DATA_ROOT", None)
+                if prev_root is None:
+                    os.environ.pop("RECRUIT_DATA_ROOT", None)
+                else:
+                    os.environ["RECRUIT_DATA_ROOT"] = prev_root
 
 
 if __name__ == "__main__":
