@@ -6,8 +6,8 @@
 >
 > 固定测试邮箱：
 >
-> - `candidate-a@example.com`
-> - `candidate-b@example.com`
+> - `13724161169@137.com`
+> - `2511391@tongji.edu.cn`
 
 > 📌 **v3.6 适用范围说明**：本文回归的全部协商场景（候选人来回改时间、确认延误、defer/return 等）触发路径是
 > `NEW → ROUND1_SCHEDULING + PENDING → 候选人 confirm → ROUND1_SCHEDULED` 的 §5.1 老路径，以及候选人 confirm 后走 §5.3 改期。
@@ -216,15 +216,15 @@ WHERE talent_id = '<talent_id>';
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `candidate-a@example.com` |
-| 当前场景干扰候选人 | `candidate-b@example.com` |
+| 当前场景目标候选人 | `13724161169@137.com` |
+| 当前场景干扰候选人 | `2511391@tongji.edu.cn` |
 
 下一组交换角色：
 
 | 用途 | 邮箱 |
 |------|------|
-| 当前场景目标候选人 | `candidate-b@example.com` |
-| 当前场景干扰候选人 | `candidate-a@example.com` |
+| 当前场景目标候选人 | `2511391@tongji.edu.cn` |
+| 当前场景干扰候选人 | `13724161169@137.com` |
 
 这样就能在只有两个真实邮箱的情况下，仍然模拟：
 
@@ -253,16 +253,16 @@ WHERE talent_id = '<talent_id>';
 ### 预设
 
 - 候选人 A：`E2E_R1_NEGOTIATION_A`
-- 邮箱：`candidate-a@example.com`
+- 邮箱：`13724161169@137.com`
 - 干扰候选人 B：`E2E_R1_NEGOTIATION_B`
-- 邮箱：`candidate-b@example.com`
+- 邮箱：`2511391@tongji.edu.cn`
 
 ### 执行骨架
 
 #### 0. 创建候选人并安排一面
 
 ```bash
-python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "candidate-a@example.com" --position "量化研究实习生"
+python3 intake/cmd_new_candidate.py --name "E2E_R1_NEGOTIATION_A" --email "13724161169@137.com" --position "量化研究实习生"
 python3 round1/cmd_round1_schedule.py --talent-id <talent_id_a> --time "2026-05-10 14:00"
 ```
 

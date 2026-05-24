@@ -51,7 +51,7 @@ class TestCmdCalendarCreate(unittest.TestCase):
         from tests.helpers import mem_tdb
         mem_tdb.upsert_one("t_iv_master", {
             "talent_id": "t_iv_master",
-            "candidate_name": "候选甲",
+            "candidate_name": "黄琪",
             "candidate_email": "huangqi@example.com",
             "education": "博士",
             "has_cpp": False,
@@ -78,7 +78,7 @@ class TestCmdCalendarCreate(unittest.TestCase):
             _cfg._cache["feishu"] = saved
         self.assertEqual(rc, 0, "stderr=" + err)
         payload = json.loads(out.strip().splitlines()[-1])
-        self.assertEqual(payload["candidate_name"], "候选甲")
+        self.assertEqual(payload["candidate_name"], "黄琪")
         self.assertEqual(payload["candidate_email"], "huangqi@example.com")
         self.assertEqual(payload["extra_attendees"], ["ou_master_real"])
         self.assertEqual(payload["route"]["interviewer_roles"], ["master"])
@@ -311,7 +311,7 @@ class TestCalendarCvAttachment(unittest.TestCase):
         req = client.calendar.v4.calendar_event_attendee.create.call_args.args[0]
         return [att.user_id for att in req.request_body.attendees]
 
-    def test_round1_attendees_are_boss_polaris_and_interviewer(self):
+    def test_round1_attendees_are_boss_polaris_hr_and_interviewer(self):
         from lib import feishu
         client = self._client(event_id="evt_attendees")
         with mock.patch("lib.feishu._get_client", return_value=client), \
@@ -321,26 +321,27 @@ class TestCalendarCvAttachment(unittest.TestCase):
                  "calendar_id": "cal_x",
                  "boss_open_id": "ou_boss",
                  "polaris_open_id": "ou_polaris",
+                 "hr_open_id": "ou_hr",
                  "interviewer_bachelor_open_id": "ou_bachelor",
              }):
             msg = feishu.create_interview_event(
                 talent_id="t_attendees",
                 interview_time="2026-04-25 14:00",
                 round_num=1,
-                candidate_name="候选甲",
+                candidate_name="黄琪",
                 extra_attendee_open_ids=["ou_master"],
                 duration_minutes=30,
                 attach_cv=False,
             )
 
-        self.assertIn("老板、Polaris（日程安排者）、面试官（共 3 人）", msg)
+        self.assertIn("老板、Polaris（日程安排者）、HR、面试官（共 4 人）", msg)
         self.assertEqual(
             self._attendee_user_ids(client),
-            ["ou_boss", "ou_polaris", "ou_master"],
+            ["ou_boss", "ou_polaris", "ou_hr", "ou_master"],
         )
         self.assertNotIn("ou_bachelor", self._attendee_user_ids(client))
 
-    def test_round2_attendees_are_boss_and_polaris_only(self):
+    def test_round2_attendees_are_boss_polaris_and_hr(self):
         from lib import feishu
         client = self._client(event_id="evt_round2_attendees")
         with mock.patch("lib.feishu._get_client", return_value=client), \
@@ -350,18 +351,19 @@ class TestCalendarCvAttachment(unittest.TestCase):
                  "calendar_id": "cal_x",
                  "boss_open_id": "ou_boss",
                  "polaris_open_id": "ou_polaris",
+                 "hr_open_id": "ou_hr",
                  "interviewer_bachelor_open_id": "ou_bachelor",
              }):
             msg = feishu.create_interview_event(
                 talent_id="t_round2_attendees",
                 interview_time="2026-04-25 14:00",
                 round_num=2,
-                candidate_name="候选甲",
+                candidate_name="黄琪",
                 attach_cv=False,
             )
 
-        self.assertIn("老板、Polaris（日程安排者）（共 2 人）", msg)
-        self.assertEqual(self._attendee_user_ids(client), ["ou_boss", "ou_polaris"])
+        self.assertIn("老板、Polaris（日程安排者）、HR（共 3 人）", msg)
+        self.assertEqual(self._attendee_user_ids(client), ["ou_boss", "ou_polaris", "ou_hr"])
 
     def test_create_event_uploads_cv_as_calendar_attachment(self):
         from lib import feishu
@@ -429,7 +431,7 @@ class TestCalendarCvAttachment(unittest.TestCase):
                 candidate_name="张三",
             )
 
-        self.assertIn("CV附件：未找到 cv_path 或 candidates/<tid>/cv 文件，已跳过", msg)
+        self.assertIn("CV附件：未找到 cv_path 或 candidate_cv/<姓名>__<tid> 文件，已跳过", msg)
         self.assertFalse(client.drive.v1.media.upload_all.called)
 
     def test_create_event_falls_back_to_candidate_cv_dir(self):
@@ -440,7 +442,7 @@ class TestCalendarCvAttachment(unittest.TestCase):
             old_root = os.environ.get("RECRUIT_DATA_ROOT")
             os.environ["RECRUIT_DATA_ROOT"] = tmp
             try:
-                cv_dir = Path(tmp) / "candidates" / "t_cv_dir" / "cv"
+                cv_dir = Path(tmp) / "candidate_cv" / "张三__t_cv_dir"
                 cv_dir.mkdir(parents=True)
                 cv_file = cv_dir / "候选人简历.pdf"
                 cv_file.write_bytes(b"%PDF-1.4 demo")

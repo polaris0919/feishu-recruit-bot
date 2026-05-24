@@ -144,5 +144,29 @@ class TestExamResult(unittest.TestCase):
         self.assertNotEqual(rc, 0)
 
 
+class TestFetchExamSubmissionArchiveSafety(unittest.TestCase):
+
+    def test_zip_members_cannot_escape_output_dir(self):
+        import io
+        import tempfile
+        import zipfile
+        from pathlib import Path
+        from exam import fetch_exam_submission as fetcher
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "out"
+            outside = Path(tmp) / "escape.txt"
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("../escape.txt", "bad")
+                zf.writestr("safe/answer.py", "print('ok')\n")
+
+            written = fetcher._extract_archive_to(buf.getvalue(), "answer.zip", str(out_dir))
+
+            self.assertFalse(outside.exists())
+            self.assertEqual(len(written), 1)
+            self.assertTrue((out_dir / "safe" / "answer.py").is_file())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

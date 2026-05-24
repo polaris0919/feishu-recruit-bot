@@ -23,20 +23,25 @@ import unittest
 from pathlib import Path
 
 _TMP_ROOT = None
+_PREV_ROOT = None
 
 
 def setUpModule():
-    global _TMP_ROOT
+    global _TMP_ROOT, _PREV_ROOT
+    _PREV_ROOT = os.environ.get("RECRUIT_DATA_ROOT")
     _TMP_ROOT = tempfile.mkdtemp(prefix="ca_test_root_")
     os.environ["RECRUIT_DATA_ROOT"] = _TMP_ROOT
     os.environ.pop("RECRUIT_DISABLE_SIDE_EFFECTS", None)
 
 
 def tearDownModule():
-    global _TMP_ROOT
+    global _TMP_ROOT, _PREV_ROOT
     if _TMP_ROOT and os.path.isdir(_TMP_ROOT):
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
-    os.environ.pop("RECRUIT_DATA_ROOT", None)
+    if _PREV_ROOT is None:
+        os.environ.pop("RECRUIT_DATA_ROOT", None)
+    else:
+        os.environ["RECRUIT_DATA_ROOT"] = _PREV_ROOT
 
 
 from lib import candidate_aliases as ca  # noqa: E402

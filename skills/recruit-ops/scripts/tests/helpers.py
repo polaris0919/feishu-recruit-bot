@@ -15,7 +15,7 @@ import sys
 # ─── 测试环境隔离 ─────────────────────────────────────────────────────────────
 os.environ.pop("TALENT_DB_PASSWORD", None)
 # v3.5.8：强制（而非 setdefault），避免外层 shell export 了 RECRUIT_DISABLE_SIDE_EFFECTS=0
-# 之后跑测试就把 cv/exam_answer/email 三件套真写到 <RECRUIT_WORKSPACE>/data 下，
+# 之后跑测试就把 cv/exam_answer/email 三件套真写到默认资料根下，
 # 一晚上能堆 75 个孤儿目录（事故复盘见 docs/AGENT_RULES.md §8）。
 # 任何想真写盘的测试要走 setUp/tearDown 自己 pop + 设 RECRUIT_DATA_ROOT 到 tmp。
 os.environ["RECRUIT_DISABLE_SIDE_EFFECTS"] = "1"

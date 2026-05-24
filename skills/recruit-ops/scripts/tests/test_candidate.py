@@ -134,9 +134,11 @@ class TestNewCandidate(CandidateFlowTestCase):
                 "--name", "目录测试2", "--email", "dir2@test.com",
             ])
             tid = self.extract_talent_id(out)
-            for sub in ("cv", "exam_answer", "email"):
+            for sub in ("exam_answer", "email"):
                 self.assertTrue((_cs.candidate_dir(tid) / sub).is_dir(),
                                 "子目录 {} 应被创建".format(sub))
+            self.assertFalse((_cs.candidate_dir(tid) / "cv").exists(),
+                             "CV 已迁到 candidate_cv/<姓名>__<tid>，新建时不创建旧 cv 子目录")
             self.assertIn(str(_cs.candidate_dir(tid)), out)
         finally:
             if prev_root is None:

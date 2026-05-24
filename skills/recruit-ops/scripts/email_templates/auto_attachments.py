@@ -11,12 +11,12 @@
   1. List[str] —— 相对 `data_root()` 的固定路径列表（典型：onboarding_offer）。
      文件 **必须存在**，否则 `auto_attachments_for()` 抛 RuntimeError，fail-fast：
      offer 邮件没带合同发出去比晚发几分钟严重得多。
-     路径相对 `RECRUIT_DATA_ROOT`（默认 <RECRUIT_WORKSPACE>/data），
+    路径相对 `RECRUIT_DATA_ROOT`（默认 /home/admin/recruit-files），
      HR 想换文件 / 换版本：直接把同名文件覆盖即可，不必改代码。
 
   2. Callable[[], List[Path]] —— 动态 resolver，返回绝对路径列表（典型：exam_invite）。
      用于"题目可能放在多个候选目录、文件名也可能换"的场景（HR 直接 cp 题包到
-     data/exam_txt/ 即可，不必改代码）。resolver 自己负责候选探测；任一返回
+     data_root/exam_package/ 即可，不必改代码）。resolver 自己负责候选探测；任一返回
      非空列表都视为成功。返回空列表会被本函数转成 RuntimeError，fail-fast。
 
 【何处调用】
@@ -49,9 +49,14 @@ def _resolve_exam_invite_attachments():
     所以走"多候选挑第一个能用的"策略，而不是 onboarding_offer 那种固定路径。
     """
     from lib.recruit_paths import exam_archive_dir
+    from lib.candidate_storage import exam_package_dir
+    package = Path(exam_package_dir())
     archive = Path(exam_archive_dir())
     exam_files = (Path(__file__).resolve().parent.parent.parent / "exam_files").resolve()
     candidates = [
+        package / "笔试题.tar.gz",
+        package / "笔试题.zip",
+        package / "笔试题.tar",
         archive / "笔试题.tar.gz",
         archive / "笔试题.zip",
         exam_files / "exam_package.zip",
@@ -94,7 +99,7 @@ def auto_attachments_for(template_name):
         if not out:
             raise RuntimeError(
                 "模板 {!r} 的默认附件未找到（resolver 返回空），拒绝发送。\n"
-                "（请检查题包是否已放进 data/exam_txt/笔试题.tar.gz 等候选路径）".format(
+                "（请检查题包是否已放进 RECRUIT_DATA_ROOT/exam_package/笔试题.tar.gz 等候选路径）".format(
                     template_name))
         bad = [str(p) for p in out if not p.is_file()]
         if bad:
@@ -114,6 +119,6 @@ def auto_attachments_for(template_name):
     if missing:
         raise RuntimeError(
             "模板 {!r} 的默认附件文件缺失，拒绝发送：{}\n"
-            "（请把文件放回 data/onoffer_data/ 或检查 RECRUIT_DATA_ROOT）".format(
+            "（请把文件放回 RECRUIT_DATA_ROOT/onoffer_data/ 或检查 RECRUIT_DATA_ROOT）".format(
                 template_name, missing))
     return out

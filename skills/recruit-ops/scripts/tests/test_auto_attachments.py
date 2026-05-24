@@ -26,10 +26,10 @@ from pathlib import Path
 from unittest import mock
 
 from email_templates import auto_attachments as aa
-from lib.recruit_paths import workspace_path
+from lib.candidate_storage import data_root
 
 
-REAL_DATA_ROOT = workspace_path("data")
+REAL_DATA_ROOT = data_root()
 
 
 class TestAutoAttachmentsRegistry(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestAutoAttachmentsRegistry(unittest.TestCase):
         self.assertEqual(aa.auto_attachments_for("nonexistent_template"), [])
 
     def test_onboarding_offer_real_files_exist(self):
-        """v3.5.10 上线必备：合同 + 登记表 docx 真的躺在 data/onoffer_data/。
+        """v3.5.10 上线必备：合同 + 登记表 docx 真的躺在 data_root/onoffer_data/。
         任何人删 / 改名这两个文件都会让该测试红，强制走 PR review。"""
         for rel in [
             "onoffer_data/致邃实习协议-2026年4月版.docx",
@@ -56,13 +56,17 @@ class TestAutoAttachmentsRegistry(unittest.TestCase):
     def test_missing_file_raises_runtime_error(self):
         """注册了但文件没了 → fail-fast，不能静默发漏附件。"""
         with tempfile.TemporaryDirectory(prefix="aa_test_") as tmp:
+            prev_root = os.environ.get("RECRUIT_DATA_ROOT")
             os.environ["RECRUIT_DATA_ROOT"] = tmp
             try:
                 with self.assertRaises(RuntimeError) as ctx:
                     aa.auto_attachments_for("onboarding_offer")
                 self.assertIn("默认附件文件缺失", str(ctx.exception))
             finally:
-                os.environ.pop("RECRUIT_DATA_ROOT", None)
+                if prev_root is None:
+                    os.environ.pop("RECRUIT_DATA_ROOT", None)
+                else:
+                    os.environ["RECRUIT_DATA_ROOT"] = prev_root
 
     def test_returns_absolute_paths(self):
         # 真实仓库下应该返回 2 个绝对路径
@@ -185,6 +189,7 @@ class TestCmdSendAutoAttach(unittest.TestCase):
     def test_onboarding_offer_fails_when_default_attachment_missing(self):
         """合同被人挪走 → cmd_send 应 fail-fast 拒绝发送。"""
         with tempfile.TemporaryDirectory(prefix="aa_send_") as tmp:
+            prev_root = os.environ.get("RECRUIT_DATA_ROOT")
             os.environ["RECRUIT_DATA_ROOT"] = tmp
             try:
                 rc, out, err = self._run([
@@ -197,7 +202,10 @@ class TestCmdSendAutoAttach(unittest.TestCase):
                                     "应 fail-fast：默认附件缺失不能继续")
                 self.assertIn("默认附件文件缺失", err)
             finally:
-                os.environ.pop("RECRUIT_DATA_ROOT", None)
+                if prev_root is None:
+                    os.environ.pop("RECRUIT_DATA_ROOT", None)
+                else:
+                    os.environ["RECRUIT_DATA_ROOT"] = prev_root
 
 
 if __name__ == "__main__":

@@ -204,7 +204,7 @@ def main(argv=None):
     # "" 或 "null" 都视为未判断，落 NULL
 
     # CV 来源可能是 Hermes cache。cache 会被清理，所以新候选人入库时
-    # 先把文件归档到 data/candidates/<tid>/cv/，再写入 talents.cv_path。
+    # 先把文件归档到 candidate_cv/<姓名>__<tid>/，再写入 talents.cv_path。
     final_cv_path = args.cv_path.strip() or None
     cv_import_warning = None
     if final_cv_path:
@@ -213,7 +213,8 @@ def main(argv=None):
             mode = (os.environ.get("RECRUIT_CV_IMPORT_MODE") or "move").strip().lower()
             if mode not in ("move", "copy"):
                 mode = "move"
-            final_cv_path = str(_cs.import_cv(talent_id, final_cv_path, mode=mode))
+            final_cv_path = str(_cs.import_cv(
+                talent_id, final_cv_path, mode=mode, candidate_name=args.name.strip()))
         except Exception as e:
             cv_import_warning = "{}: {}".format(type(e).__name__, e)
 
@@ -237,7 +238,8 @@ def main(argv=None):
 
     save_candidate(talent_id, cand)
 
-    # v3.5.8：候选人入库后立刻建资料目录（cv/exam_answer/email）
+    # v3.5.8：候选人入库后立刻建资料目录（exam_answer/email）；
+    # CV 已迁到 candidate_cv/<姓名>__<tid>/，仅在真正导入 CV 时创建。
     # warn-continue 风格：mkdir 失败不阻断录入，只飞书 warn 让运维补
     try:
         from lib import candidate_storage as _cs

@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 # 必须在导入业务代码前 setup helpers
@@ -876,13 +877,36 @@ class TestCmdDelete(unittest.TestCase):
     def setUp(self):
         helpers.wipe_state()
         import tempfile
+        self._data_root = tempfile.mkdtemp(prefix="recruit_v33_data_")
         self._archive_dir = tempfile.mkdtemp(prefix="recruit_v33_archive_")
+        self._prev_data_root = os.environ.get("RECRUIT_DATA_ROOT")
+        os.environ["RECRUIT_DATA_ROOT"] = self._data_root
         os.environ["RECRUIT_DELETED_ARCHIVE_DIR"] = self._archive_dir
 
     def tearDown(self):
         os.environ.pop("RECRUIT_DELETED_ARCHIVE_DIR", None)
+        if self._prev_data_root is None:
+            os.environ.pop("RECRUIT_DATA_ROOT", None)
+        else:
+            os.environ["RECRUIT_DATA_ROOT"] = self._prev_data_root
         import shutil
         shutil.rmtree(self._archive_dir, ignore_errors=True)
+        shutil.rmtree(self._data_root, ignore_errors=True)
+
+    def _prepare_current_asset_dirs(self, tid, name="张三"):
+        from lib import candidate_storage as cs
+        cv_dir = cs.cv_dir(tid, name)
+        exam_dir = cs.exam_submission_dir(tid, name)
+        email_dir = cs.email_dir(tid)
+        cv_dir.mkdir(parents=True, exist_ok=True)
+        exam_dir.mkdir(parents=True, exist_ok=True)
+        email_dir.mkdir(parents=True, exist_ok=True)
+        cv_file = cv_dir / "resume.pdf"
+        cv_file.write_bytes(b"%PDF fake")
+        (exam_dir / "answer.py").write_text("print('ok')\n", encoding="utf-8")
+        (email_dir / "mail.txt").write_text("hello\n", encoding="utf-8")
+        helpers.mem_tdb._state["candidates"][tid]["cv_path"] = str(cv_file)
+        return cv_dir, exam_dir, email_dir
 
     def test_delete_with_default_backup(self):
         tid = _mk_talent()
@@ -921,6 +945,109 @@ class TestCmdDelete(unittest.TestCase):
         result = json.loads(out)
         self.assertIsNone(result["archive_path"])
         self.assertFalse(helpers.mem_tdb.talent_exists(tid))
+
+    def test_delete_archives_current_storage_dirs(self):
+        tid = _mk_talent(talent_id="t_del_assets", name="张三")
+        cv_dir, exam_dir, email_dir = self._prepare_current_asset_dirs(tid, "张三")
+        out, err, rc = helpers.call_main("talent.cmd_delete", [
+            "--talent-id", tid,
+            "--confirm-delete-talent", tid,
+            "--reason", "测试删除",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        result = json.loads(out)
+        archived = result["asset_archive_paths"]
+        self.assertEqual(len(archived), 3)
+        self.assertFalse(cv_dir.exists())
+        self.assertFalse(exam_dir.exists())
+        self.assertFalse(email_dir.exists())
+        self.assertFalse(helpers.mem_tdb.talent_exists(tid))
+        for path in archived:
+            self.assertTrue(Path(path).is_dir(), path)
+        names = [Path(p).name for p in archived]
+        self.assertTrue(any("__candidate_cv__" in n for n in names))
+        self.assertTrue(any("__exam_submissions__" in n for n in names))
+        self.assertTrue(any("__email__" in n for n in names))
+
+    def test_delete_no_backup_still_archives_file_dirs(self):
+        tid = _mk_talent(talent_id="t_no_backup_assets", name="张三")
+        cv_dir, exam_dir, email_dir = self._prepare_current_asset_dirs(tid, "张三")
+        out, err, rc = helpers.call_main("talent.cmd_delete", [
+            "--talent-id", tid,
+            "--confirm-delete-talent", tid,
+            "--reason", "测试残留",
+            "--no-backup",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        result = json.loads(out)
+        self.assertIsNone(result["archive_path"])
+        self.assertEqual(len(result["asset_archive_paths"]), 3)
+        self.assertFalse(cv_dir.exists())
+        self.assertFalse(exam_dir.exists())
+        self.assertFalse(email_dir.exists())
+        self.assertFalse(helpers.mem_tdb.talent_exists(tid))
+
+    def test_delete_archives_dirs_when_name_changed(self):
+        tid = _mk_talent(talent_id="t_rename_assets", name="新姓名")
+        from lib import candidate_storage as cs
+        old_cv_dir = cs.cv_dir(tid, "旧姓名")
+        old_exam_dir = cs.exam_submission_dir(tid, "旧姓名")
+        old_cv_dir.mkdir(parents=True, exist_ok=True)
+        old_exam_dir.mkdir(parents=True, exist_ok=True)
+        cv_file = old_cv_dir / "old-name.pdf"
+        cv_file.write_bytes(b"%PDF")
+        (old_exam_dir / "answer.md").write_text("answer\n", encoding="utf-8")
+        helpers.mem_tdb._state["candidates"][tid]["cv_path"] = str(cv_file)
+        out, err, rc = helpers.call_main("talent.cmd_delete", [
+            "--talent-id", tid,
+            "--confirm-delete-talent", tid,
+            "--reason", "测试改名",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        result = json.loads(out)
+        self.assertEqual(len(result["asset_archive_paths"]), 2)
+        self.assertFalse(old_cv_dir.exists())
+        self.assertFalse(old_exam_dir.exists())
+
+    def test_delete_archives_legacy_residual_dirs(self):
+        tid = _mk_talent(talent_id="t_legacy_assets", name="张三")
+        from lib import candidate_storage as cs
+        legacy_cv = cs.legacy_cv_dir(tid)
+        legacy_exam = cs.exam_answer_dir(tid)
+        legacy_cv.mkdir(parents=True, exist_ok=True)
+        legacy_exam.mkdir(parents=True, exist_ok=True)
+        (legacy_cv / "old.pdf").write_bytes(b"%PDF")
+        (legacy_exam / "old-answer.py").write_text("x=1\n", encoding="utf-8")
+        out, err, rc = helpers.call_main("talent.cmd_delete", [
+            "--talent-id", tid,
+            "--confirm-delete-talent", tid,
+            "--reason", "测试历史残留",
+            "--json",
+        ])
+        self.assertEqual(rc, 0, "stderr=" + err)
+        result = json.loads(out)
+        self.assertEqual(len(result["asset_archive_paths"]), 2)
+        self.assertFalse(legacy_cv.exists())
+        self.assertFalse(legacy_exam.exists())
+
+    def test_delete_aborts_db_delete_when_file_archive_fails(self):
+        tid = _mk_talent(talent_id="t_archive_fail", name="张三")
+        cv_dir, _, _ = self._prepare_current_asset_dirs(tid, "张三")
+        with mock.patch("talent.cmd_delete.shutil.move",
+                        side_effect=OSError("disk full")):
+            out, err, rc = helpers.call_main("talent.cmd_delete", [
+                "--talent-id", tid,
+                "--confirm-delete-talent", tid,
+                "--reason", "测试失败保护",
+                "--json",
+            ])
+        self.assertEqual(rc, 1)
+        self.assertIn("FS 归档失败", err)
+        self.assertTrue(helpers.mem_tdb.talent_exists(tid))
+        self.assertTrue(cv_dir.exists())
 
     def test_delete_missing_talent_raises(self):
         out, err, rc = helpers.call_main("talent.cmd_delete", [

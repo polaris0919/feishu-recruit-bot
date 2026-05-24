@@ -312,7 +312,13 @@ def _process_candidate(imap, candidate, since_dt, dry_run=False):
         # 出错绝不阻塞邮件入库 —— 邮件主体 SQL 是事实，附件落盘是衍生。
         try:
             att_meta = email_attachments.extract_and_save(
-                msg, talent_id=talent_id, email_id=email_id, context=context)
+                msg,
+                talent_id=talent_id,
+                email_id=email_id,
+                context=context,
+                candidate_name=candidate.get("candidate_name"),
+                sent_at=sent_at,
+            )
         except Exception as e:
             print("[inbox/cmd_scan] 附件提取异常 tid={} eid={}: {}".format(
                 talent_id, email_id, e), file=sys.stderr)

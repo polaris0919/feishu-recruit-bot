@@ -20,7 +20,7 @@ agent 的职责只有一件事：**把入站邮件 / 老板指令翻译成 atomi
 
 三条原则：
 
-1. **动作 = atomic CLI**。改世界只能通过 §3 表里的 CLI；禁止裸 SQL / SMTP / IMAP。
+1. **动作 = atomic CLI**。改世界只能通过 §3 表里的 CLI；禁止裸 SQL / SMTP / IMAP。凡是招聘语境，或邮件 sender / recipient 可能命中 `talents.candidate_email`，都必须先按 recruit-ops 路由；候选人邮件必须经 `outbound.cmd_send` 或封装它的业务 CLI，不能用通用 `email-send` skill 代替。
 2. **判断 = agent**。读 `talent_emails` / `talents` / `talent_events` / `ai_payload` 决定下一步，不藏内存状态。
 3. **拿不准就推飞书**。规则未覆盖、`confidence < 0.6`、intent=`unknown` / `other`、出现 `ambiguous` / `config_error` 一律 STOP，调 `feishu.cmd_notify --severity warn` 让老板介入，**不做任何写动作**。若老板 / HR 给的是一个 §4 / §5 都未覆盖的 workflow 请求，进入 §3.5 的 uncovered workflow planner：先拆 atomic CLI 草案、逐步请人确认，确认前不执行写动作。
 
@@ -116,6 +116,9 @@ agent 不是"任何人都能给我下命令"——下面三个角色 + 候选人
 | `inbox.cmd_analyze` | LLM 分意图 + 写 `ai_*` + 推飞书 |
 | `feishu.cmd_calendar_create` / `_delete` | 飞书日历 event |
 | `feishu.cmd_notify` | **唯一**飞书消息出口 |
+| `feishu.cmd_send_file` | 飞书发送本地文件（CV / 笔试附件 / 运维文件）；支持 `--to role` 或 `--open-id ou_xxx` |
+| `talent.cmd_send_cv_to_feishu` | 按候选人发送 CV 到飞书（封装 `feishu.cmd_send_file`） |
+| `exam.cmd_send_submission_to_feishu` | 按候选人发送最新笔试提交附件到飞书（封装 `feishu.cmd_send_file`） |
 | `intake.cmd_route_interviewer` | 一面派单（纯查询，零副作用） |
 | `interview.cmd_result` | 一/二面结果 → 下一 stage；候选人邮件内部调用 `outbound.cmd_send`，不直连 SMTP；**v3.8.1**：`--result reject_delete` 必须带 `--confirm-reject-delete <talent_id>` |
 | `exam.cmd_exam_result` | 笔试结果 → 下一 stage；二面邀请内部调用 `outbound.cmd_send`，不直连 SMTP；**v3.8.1**：`--result reject_delete` 必须带 `--confirm-reject-delete <talent_id>` |
@@ -130,9 +133,10 @@ agent 不是"任何人都能给我下命令"——下面三个角色 + 候选人
 - `current_stage` 只能用 `--stage` 推，**不要** `--set current_stage=...`。
 - `POST_OFFER_FOLLOWUP` 阶段 agent 不自动回信，一律生成 draft 写入 `talent_emails.ai_payload.draft` + 推飞书消息给老板看；老板**在飞书**对 bot 说"用 cached draft 给 X 回" / "OK 就发"等指令（Hermes Gateway 接到后路由给 agent）后才走 §4.8 chain（飞书消息是**纯文本**，**没有按钮**——但有完整入站通道）。
 - chain 主业务写动作不超过 5 步（v3.8.1 修订：`outbound.cmd_send` / `feishu.cmd_calendar_create` / `feishu.cmd_calendar_delete` / `talent.cmd_update`）；末尾的 `feishu.cmd_notify` fanout 通知（面试官 / Polaris / boss / HR 多张卡）**不计入** 5 步限。超过 5 步主业务动作先回头看是不是漏了一个 atomic CLI。
+- **飞书发文件是外部副作用**：`feishu.cmd_send_file` / `talent.cmd_send_cv_to_feishu` / `exam.cmd_send_submission_to_feishu` 必须按 §2.3.1 propose-confirm 执行。CV 和笔试答案都含候选人隐私；不得自动发送，不得猜收件人，不得把 `--open-id` 目标当成已确认。
 - **二面时间确认硬规则**：任何二面时间（笔试通过、一面后跳过笔试直进二面、WAIT_RETURN 回归、二面改期、留池反向激活）都不能直接确认。老板第一次给出的二面时间只是候选人邀请时间；必须先进入 `ROUND2_SCHEDULING` 并发送二面邀请，候选人邮件确认后只推老板决策卡，老板再次明确下达“二面时间确认 / 建日历 / OK 安排”后才允许创建老板 + Polaris 日历并推进 `ROUND2_SCHEDULED`。`talent.cmd_update` 已 hard guard：任何非 `ROUND2_SCHEDULING → ROUND2_SCHEDULED` 的二面确认都会失败，即使加 `--force` 也不允许。
 - 拒类操作三条路径：(1) **人工物理删**走 `interview.cmd_result --result reject_delete`（自带先发拒信）；(2) **人工留池**走 §4.6 / §5.7；(3) **cron 自动删档**走 `auto_reject.cmd_scan_exam_timeout`（v3.8.3 起：笔试 3 天未交 = 拒信 + cmd_delete 物理删）。**不要** 直接 `talent.cmd_delete` 跳过拒信。
-- **日历固定 attendee（v3.8 修订）**：`feishu.cmd_calendar_create` 内部会自动把 **`feishu.boss_open_id` + `feishu.polaris_open_id`** 加入参会人（去重保护），无需 chain 显式 `--extra-attendee`。Polaris 是固定日程安排者 / 运营观察者，不是面试官角色。一面必须把 `intake.cmd_route_interviewer` 路由出的真实面试官通过 `--extra-attendee` 传入；若上层漏传，`cmd_calendar_create` 会自动补派单。`master` 表示硕士/博士候选人的一面面试官，**不表示老板**。
+- **日历固定 attendee（v3.8 修订）**：`feishu.cmd_calendar_create` 内部会自动把 **`feishu.boss_open_id` + `feishu.polaris_open_id` + `feishu.hr_open_id`** 加入所有面试日历参会人。这些都无需 chain 显式 `--extra-attendee`。Polaris 是固定日程安排者 / 运营观察者，不是面试官角色。一面必须把 `intake.cmd_route_interviewer` 路由出的真实面试官通过 `--extra-attendee` 传入；若上层漏传，`cmd_calendar_create` 会自动补派单。`master` 表示硕士/博士候选人的一面面试官，**不表示老板**。
 - **Polaris 运营同步卡（v3.8 修订）**：Polaris 是固定日程安排者 / 运营观察者。除日历邀请外，**任何**会改变候选人 stage / 关键字段的 chain 末尾必须额外推一张 `feishu.cmd_notify --to polaris --severity info` 同步卡。**当前覆盖**：§4.1（一面初排）/ §4.2（confirm 升级）/ §4.3.3（改期）/ §4.4（暂缓）/ §4.5（笔试通过→二面）/ §4.6（笔试不过留池）/ §4.9（force-jump）/ §4.12（老板恢复）/ §4.12.2（v3.8.1 续邀请）/ §4.13（候选人撤回）/ §4.14（v3.8.1 no-show）/ §4.15（v3.8.1 已入职——胜利收尾）。
   - **身份边界**：`polaris` 使用 `feishu.polaris_open_id`；`interviewer-bachelor` 只用于本科候选人的一面派单通知，二者不能混用。
   - **不推 Polaris 卡的场景**（设计有意为之）：cron `auto_reject` 自动拒（非业务决策）；§4.7 候选人主动来信（仅信号，stage 没变，已由 `inbox.cmd_analyze` 同步老板 + Polaris）；§4.8 / §4.10 POST_OFFER_FOLLOWUP 阶段的 chat / offer 邮件（业务谈判过程，由 HR 接手）；`exam.cmd_exam_result` atomic 等价路径（不在 chain 内，Polaris 由后续 §4.2 升级时获知）。
@@ -582,7 +586,7 @@ run_chain(steps)
 
 > stage = `EXAM_REVIEWED`，老板拍板通过 + 给二面时间。
 > 如果老板只说"笔试通过 / 安排二面"但没给时间，agent **只能问二面候选邀请时间**，不能输出"确认后建日历 / 更新 `ROUND2_SCHEDULED`"这类旧流程承诺。正确澄清话术必须说明：收到时间后只会发二面邀请并进入 `ROUND2_SCHEDULING`；候选人回信 confirm 后，还要老板再次明确授权才建日历并进入 `ROUND2_SCHEDULED`。
-> 如果老板已经给了时间，agent 的 propose 也**只能**覆盖下面这条 §4.5：发送 `round2_invite` + 推到 `ROUND2_SCHEDULING`。确认回复（如"确认安排 候选甲 2026-05-20 15:00"）只授权发二面邀请，**不授权**建日历，也**不授权** `ROUND2_SCHEDULED`。禁止把 §4.5 和 §4.2 合并成一次 confirm。
+> 如果老板已经给了时间，agent 的 propose 也**只能**覆盖下面这条 §4.5：发送 `round2_invite` + 推到 `ROUND2_SCHEDULING`。确认回复（如"确认安排 黄琪 2026-05-20 15:00"）只授权发二面邀请，**不授权**建日历，也**不授权** `ROUND2_SCHEDULED`。禁止把 §4.5 和 §4.2 合并成一次 confirm。
 
 ```python
 run_chain([
@@ -801,7 +805,7 @@ PYTHONPATH=scripts python3 -m offer.cmd_send_onboarding_offer \
 
 **与 §4.5 / §4.6 的关系**：
 
-- §4.5 / §4.6 是 chain 形态（`outbound.cmd_send` + `talent.cmd_update` 两步），适用于 agent 已经把"判 pass/不过"的决策权交给老板（老板**在飞书**给 bot 下指令 → Hermes 路由到 agent；**不是**飞书按钮——飞书没按钮但**有入站通道**）、且需要**自定义模板变量**的场景（如二面发 `round2_invite` 同时传 `location`）。
+- §4.5 / §4.6 是 chain 形态（`outbound.cmd_send` + `talent.cmd_update` 两步），适用于 agent 已经把"判 pass/不过"的决策权交给老板（老板**在飞书**给 bot 下指令 → Hermes 路由到 agent；**不是**飞书按钮——飞书没按钮但**有入站通道**）、且需要按 chain 显式记录发送时间 / 状态字段的场景。`company` / `location` 是 `outbound.cmd_send` 自动注入的常量，不要在 `--vars` 里传。
 - §4.11 的 atomic CLI 是 chain 形态的"等价捷径"，参数更少 / 没法自定义模板变量。
 - **二选一**：同一个老板指令**不要**同时跑 §4.5 和 §4.11；以老板原话最具体的那条为准。
 
@@ -1086,6 +1090,87 @@ run_chain([
 - 入职后候选人**仍可能**来信（咨询合同、问报到流程等）——保持 stage=ONBOARDED，按 §5 表 ONBOARDED 行处理（推 info 卡，不自动回信）。
 - 如果老板要彻底清理这个候选人（不希望以后还被 LLM 分析新邮件） → 在 ONBOARDED 之上**再**跑 `talent.cmd_delete`（**这是手动归档动作,不在本 chain 里**）。
 
+### 4.16 通过飞书发送候选人文件 / 本地文件
+
+> 适用：Boss / HR 要求“把 X 的简历/CV 发给 Y”、“把 X 的笔试答案/附件发给 Y”、“把某个本地文件通过飞书发给 Y”。这是**外部文件发送**，必须走 §2.3.1 propose-confirm。
+
+#### 4.16.1 发送候选人 CV
+
+触发词：`发简历` / `发 CV` / `把 X 简历发给 HR/老板/Polaris/面试官/ou_xxx`。
+
+流程：
+
+1. 先解析唯一候选人；如姓名命中多名，STOP 问清楚。
+2. 只读查询 `talent.cmd_show --talent-id <tid> --json`，确认 `cv_path` 存在。
+3. propose 单条 atomic CLI，等下一轮 confirm：
+
+```bash
+uv run python3 scripts/talent/cmd_send_cv_to_feishu.py \
+  --talent-id <tid> --to <boss|hr|polaris|interviewer-master|interviewer-bachelor|interviewer-cpp>
+```
+
+如果用户给的是显式 open_id：
+
+```bash
+uv run python3 scripts/talent/cmd_send_cv_to_feishu.py \
+  --talent-id <tid> --open-id ou_xxx
+```
+
+propose 文案必须包含：候选人姓名 + `talent_id`、文件类型 `CV`、目标角色 / open_id、文件名（来自 dry-run 或 `cv_path` basename）。
+
+#### 4.16.2 发送候选人最新笔试答案附件
+
+触发词：`发笔试答案` / `发笔试附件` / `把 X 的笔试提交发给 Y`。
+
+流程：
+
+1. 先解析唯一候选人。
+2. 可先跑 dry-run 确认最新 `context='exam'` inbound 是否已有保存附件：
+
+```bash
+uv run python3 scripts/exam/cmd_send_submission_to_feishu.py \
+  --talent-id <tid> --to <role> --dry-run --json
+```
+
+3. propose 正式命令，等下一轮 confirm：
+
+```bash
+uv run python3 scripts/exam/cmd_send_submission_to_feishu.py \
+  --talent-id <tid> --to <boss|hr|polaris|interviewer-master|interviewer-bachelor|interviewer-cpp>
+```
+
+显式 open_id 同理加 `--open-id ou_xxx`。propose 文案必须包含：候选人、最新笔试邮件时间、附件文件名、目标。
+
+#### 4.16.3 发送任意本地文件
+
+触发词：`把 /path/to/file 发给 HR` / `通过飞书发这个文件`。
+
+流程：
+
+1. 文件路径必须来自用户明确给出或 Hermes 附件上下文；不得猜路径。
+2. 先 dry-run：
+
+```bash
+uv run python3 scripts/feishu/cmd_send_file.py \
+  --file <absolute-path> --to <role> --dry-run --json
+```
+
+3. propose 正式命令，等下一轮 confirm：
+
+```bash
+uv run python3 scripts/feishu/cmd_send_file.py \
+  --file <absolute-path> --to <role> --title "<说明>"
+```
+
+显式 open_id 用 `--open-id ou_xxx`。如果文件不存在 / 目标不明确 / open_id 未确认，STOP。
+
+硬规则：
+
+- 不要把 `--to hr`、`--to boss`、`--to polaris` 和显式 `--open-id` 混淆；显式 open_id 优先，但必须在 propose 中完整回显。
+- 不要发送整个候选人目录；只能发送单个明确文件。
+- 不要自动群发多个候选人的 CV / 笔试答案；多候选人逐个 propose-confirm。
+- 失败时如实报告 `UserInputError` / 飞书上传失败；不要换目标重试。
+
 ---
 
 ## 5. 表外的常见 intent
@@ -1123,6 +1208,8 @@ run_chain([
 | 5.21 | 任意 stage | LLM `confidence < 0.6` **或** `intent=other` | `feishu.cmd_notify --severity warn "需要人工分类"`（**优先级最高**：先匹配本行,绕过下一行的 normal 卡;避免低 confidence 输出被错误归类成 need_boss_action 从而走 normal 卡，丢掉警示信息） |
 | 5.22 | 任意 stage | `need_boss_action=true` 但 intent 不在 §4 / §5 表 | `feishu.cmd_notify --severity normal "未分类的需老板介入邮件"`（仅当 5.21 不命中时才走本行） |
 | 5.23 | 老板 / HR 飞书主动提出的 workflow 请求 | §4 / §5 没有精确场景 | 进入 §3.5 uncovered workflow planner：先只读查事实 + 拆 atomic CLI 草案 + 推计划卡；人类逐步确认前**不执行任何写动作**。本行只处理"人主动给 bot 下操作请求"；候选人 inbound 邮件仍按 5.21 / 5.22。 |
+| 5.24 | 老板 / HR 飞书主动提出“发 CV / 发简历 / 发笔试答案 / 发附件 / 通过飞书发文件” | 文件发送请求 | 走 §4.16。先只读 / dry-run 确认候选人、文件名和目标，再 propose 单条 `talent.cmd_send_cv_to_feishu` / `exam.cmd_send_submission_to_feishu` / `feishu.cmd_send_file`，下一轮 confirm 后执行。 |
+| 5.24 | 老板 / HR 飞书主动提出“发 CV / 发简历 / 发笔试答案 / 发附件 / 通过飞书发文件” | 文件发送请求 | 走 §4.16。先只读 / dry-run 确认候选人、文件名和目标，再 propose 单条 `talent.cmd_send_cv_to_feishu` / `exam.cmd_send_submission_to_feishu` / `feishu.cmd_send_file`，下一轮 confirm 后执行。 |
 
 ---
 

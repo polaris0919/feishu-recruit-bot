@@ -606,6 +606,8 @@ class TestOnboardingOfferChain(unittest.TestCase):
                     "onboard_date=2026-05-06",
                     "evaluation_criteria=实习期前 1 个月为试用期。",
                     "--attach", self.attach_path,
+                    "--allow-unsafe-attach",
+                    "--confirm-unsafe-attach", self.attach_path,
                 ]),
                 Step("notify", "feishu.cmd_notify", args=[
                     "--to", "hr",

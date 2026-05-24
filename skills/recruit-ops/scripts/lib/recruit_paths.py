@@ -28,7 +28,7 @@ def config_dir() -> Path:
 
 
 def exam_archive_dir() -> Path:
-    raw = os.environ.get("RECRUIT_EXAM_ARCHIVE_DIR", str(workspace_path("data", "exam_txt")))
+    raw = os.environ.get("RECRUIT_EXAM_ARCHIVE_DIR", "/home/admin/recruit-files/exam_package")
     return Path(os.path.expanduser(raw))
 
 

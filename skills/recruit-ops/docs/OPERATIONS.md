@@ -19,13 +19,20 @@ last_updated: 2026-05-09
 | 名字 | 实际路径 |
 |---|---|
 | `<workspace_root>` | `/home/admin/recruit-workspace` |
+| 招聘资料根目录 | `/home/admin/recruit-files` |
 | 脚本目录 | `<workspace_root>/skills/recruit-ops/scripts/` |
 | 运行时解释器 | `<workspace_root>/skills/recruit-ops/.venv/bin/python3`（与 `uv run python3` 等价） |
 | Hermes Gateway 加载根 | `~/.hermes/skills/openclaw-imports/recruit-ops/` |
 | 飞书附件落盘 | `<workspace_root>/data/media/inbound/`（消息里给的是已解出的绝对路径） |
-| 候选人附件落盘 | `<workspace_root>/data/candidates/<tid>/` |
+| 候选人普通邮件附件落盘 | `/home/admin/recruit-files/candidates/<tid>/email/` |
+| 候选人 CV 原件目录 | `/home/admin/recruit-files/candidate_cv/<候选人名>__<talent_id>/` |
+| 候选人笔试答案目录 | `/home/admin/recruit-files/exam_submissions/<候选人名>__<talent_id>/` |
+| 笔试题包目录 | `/home/admin/recruit-files/exam_package/` |
+| 候选人删除归档目录 | `/home/admin/recruit-files/deleted_archive/<YYYY-MM>/` |
 
 **重要**：Hermes Gateway 给消息里的文件路径**已经是绝对路径**，CLI `--file-path` 直接原样接受；agent 侧**不要**改写成 `<workspace_root>`-相对形式。
+
+`talent.cmd_delete` 删除候选人前会把当前正式资料目录（CV、笔试提交、普通邮件附件）搬进删除归档目录；归档失败会中止 DB 删除，避免人才库已删但文件仍散落在正式资料区。
 
 ---
 

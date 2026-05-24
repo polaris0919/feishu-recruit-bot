@@ -16,10 +16,11 @@ from __future__ import print_function
 import argparse
 import sys
 from datetime import datetime
-from pathlib import Path
+
+from lib.candidate_storage import data_root
 
 
-_HEARTBEAT_PATH = Path("/home/admin/recruit-workspace/data/.cron_heartbeat")
+_HEARTBEAT_PATH = data_root() / ".cron_heartbeat"
 
 
 def _read_last():

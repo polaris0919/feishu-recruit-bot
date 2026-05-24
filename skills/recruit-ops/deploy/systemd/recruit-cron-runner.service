@@ -10,6 +10,8 @@ Type=oneshot
 WorkingDirectory=/home/admin/recruit-workspace/skills/recruit-ops
 Environment=RECRUIT_WORKSPACE_ROOT=/home/admin/recruit-workspace
 Environment=RECRUIT_CONFIG_DIR=/home/admin/recruit-workspace/config
+Environment=RECRUIT_DATA_ROOT=/home/admin/recruit-files
+Environment=RECRUIT_EXAM_ARCHIVE_DIR=/home/admin/recruit-files/exam_package
 Environment=PYTHONPATH=/home/admin/recruit-workspace/skills/recruit-ops/scripts
 ExecStart=/home/admin/recruit-workspace/skills/recruit-ops/.venv/bin/python -m cron.cron_runner
 # 5 个子任务上限 5×300s=25min；给 systemd 留 30 分钟兜底，超时杀进程

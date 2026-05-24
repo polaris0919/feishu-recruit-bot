@@ -37,12 +37,21 @@ jobs:
         working-directory: skills/recruit-ops
         run: uv sync --group dev
 
+      - name: Prepare CI recruit data root
+        run: |
+          root="$RUNNER_TEMP/recruit-files"
+          mkdir -p "$root/onoffer_data" "$root/exam_package"
+          printf 'placeholder agreement for CI tests\n' > "$root/onoffer_data/致邃实习协议-2026年4月版.docx"
+          printf 'placeholder onboarding form for CI tests\n' > "$root/onoffer_data/致邃投资-实习生入职信息登记表-2026年版.docx"
+          printf 'placeholder exam package for CI tests\n' > "$root/exam_package/笔试题.tar.gz"
+
       # 关键：把所有副作用闸门拧到 OFF，避免 CI 意外触达真 DB / 真飞书 / 真邮箱。
       # 单元测试本来就用 mock，但多一道防御没坏处。
       - name: Run pytest
         working-directory: skills/recruit-ops
         env:
           PYTHONPATH: scripts
+          RECRUIT_DATA_ROOT: ${{ runner.temp }}/recruit-files
           RECRUIT_DISABLE_DB: "1"
           RECRUIT_DISABLE_SIDE_EFFECTS: "1"
           RECRUIT_DISABLE_DB_WRITES: "1"
