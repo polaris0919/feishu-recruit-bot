@@ -21,10 +21,12 @@ from unittest import mock
 # 先注入 RECRUIT_DATA_ROOT，再 import 模块（其实 candidate_storage 每次都重读
 # env，但这样写更明确）
 _TMP_ROOT = None
+_PREV_ROOT = None
 
 
 def setUpModule():
-    global _TMP_ROOT
+    global _TMP_ROOT, _PREV_ROOT
+    _PREV_ROOT = os.environ.get("RECRUIT_DATA_ROOT")
     _TMP_ROOT = tempfile.mkdtemp(prefix="cs_test_root_")
     os.environ["RECRUIT_DATA_ROOT"] = _TMP_ROOT
     # 确保 side_effects_disabled() 关闭，否则 ensure_candidate_dirs 全 dry-run
@@ -32,10 +34,13 @@ def setUpModule():
 
 
 def tearDownModule():
-    global _TMP_ROOT
+    global _TMP_ROOT, _PREV_ROOT
     if _TMP_ROOT and os.path.isdir(_TMP_ROOT):
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
-    os.environ.pop("RECRUIT_DATA_ROOT", None)
+    if _PREV_ROOT is None:
+        os.environ.pop("RECRUIT_DATA_ROOT", None)
+    else:
+        os.environ["RECRUIT_DATA_ROOT"] = _PREV_ROOT
 
 
 from lib import candidate_storage as cs  # noqa: E402
